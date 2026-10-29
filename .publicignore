@@ -1,5 +1,0 @@
-# Paths that stay in the private repo only (one path or glob per line).
-.github/workflows/sync-public.yml
-scripts/sync_public.sh
-scripts/export_clean.sh
-.publicignore
