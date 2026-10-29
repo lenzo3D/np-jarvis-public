@@ -1,0 +1,30 @@
+{
+  "permissions": {
+    "allow": [
+      "mcp__school__*",
+      "Read(/opt/politemalljarvis/workspace/**)",
+      "Edit(/opt/politemalljarvis/workspace/**)",
+      "Write(/opt/politemalljarvis/workspace/**)",
+      "Read(/home/jarvis/.claude/skills/**)",
+      "Bash(python3:*)",
+      "Bash(soffice:*)",
+      "Bash(pandoc:*)",
+      "Bash(ls:*)",
+      "Bash(mkdir:*)",
+      "Bash(cp:*)",
+      "Bash(mv:*)",
+      "WebSearch",
+      "WebFetch"
+    ],
+    "deny": [
+      "Read(/opt/politemalljarvis/state/**)",
+      "Read(/opt/politemalljarvis/secrets.env)",
+      "Edit(/opt/politemalljarvis/core/**)",
+      "Edit(/opt/politemalljarvis/ops/**)",
+      "Edit(/opt/politemalljarvis/school_mcp/**)",
+      "Bash(sudo:*)",
+      "Bash(curl:*)"
+    ],
+    "defaultMode": "acceptEdits"
+  }
+}

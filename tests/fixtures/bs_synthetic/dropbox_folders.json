@@ -1,0 +1,5 @@
+[
+ {"Id":55,"Name":"Tutorial 5","DueDate":"2026-10-30T15:59:00.000Z","Availability":{"StartDate":null,"EndDate":"2026-11-01T15:59:00.000Z"},"CustomInstructions":{"Text":"Submit docx","Html":"<p>Submit docx</p>"}},
+ {"Id":56,"Name":"Reflection","DueDate":null,"Availability":{"StartDate":null,"EndDate":"2026-11-20T15:59:00.000Z"}},
+ {"Id":57,"Name":"Optional","DueDate":null,"Availability":null}
+]

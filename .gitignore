@@ -1,0 +1,16 @@
+state/
+workspace/
+secrets.env
+.venv/
+__pycache__/
+*.pyc
+.superpowers/
+.sk
+.pytest_cache/
+.DS_Store
+
+# live probe output: real account data, never commit
+tests/fixtures/bs/
+docs/probe-results.md
+state/
+*.egg-info/

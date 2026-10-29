@@ -1,0 +1,113 @@
+{
+ "PagingInfo": {
+  "Bookmark": "",
+  "HasMoreItems": false
+ },
+ "Items": [
+  {
+   "OrgUnit": {
+    "Id": 1001,
+    "Type": {
+     "Id": 3,
+     "Code": "Course Offering"
+    },
+    "Name": "Investments",
+    "Code": "26S2-731IV_013686"
+   },
+   "Access": {
+    "IsActive": true,
+    "CanAccess": true
+   }
+  },
+  {
+   "OrgUnit": {
+    "Id": 1002,
+    "Type": {
+     "Id": 3,
+     "Code": "Course Offering"
+    },
+    "Name": "Commercial Banking",
+    "Code": "26S2-731CMBK_013682"
+   },
+   "Access": {
+    "IsActive": true,
+    "CanAccess": true
+   }
+  },
+  {
+   "OrgUnit": {
+    "Id": 1003,
+    "Type": {
+     "Id": 3,
+     "Code": "Course Offering"
+    },
+    "Name": "Corporate Finance",
+    "Code": "26S1-731CFIN_013674"
+   },
+   "Access": {
+    "IsActive": true,
+    "CanAccess": true
+   }
+  },
+  {
+   "OrgUnit": {
+    "Id": 1004,
+    "Type": {
+     "Id": 3,
+     "Code": "Course Offering"
+    },
+    "Name": "Economics",
+    "Code": "25S2-78ECN_013458"
+   },
+   "Access": {
+    "IsActive": true,
+    "CanAccess": true
+   }
+  },
+  {
+   "OrgUnit": {
+    "Id": 1005,
+    "Type": {
+     "Id": 3,
+     "Code": "Course Offering"
+    },
+    "Name": "AI Literacy",
+    "Code": "26EG-CLTE_AILS"
+   },
+   "Access": {
+    "IsActive": true,
+    "CanAccess": true
+   }
+  },
+  {
+   "OrgUnit": {
+    "Id": 900,
+    "Type": {
+     "Id": 3,
+     "Code": "Course Offering"
+    },
+    "Name": "Old Module",
+    "Code": "OLD1001"
+   },
+   "Access": {
+    "IsActive": false,
+    "CanAccess": false
+   }
+  },
+  {
+   "OrgUnit": {
+    "Id": 1001,
+    "Type": {
+     "Id": 3,
+     "Code": "Course Offering"
+    },
+    "Name": "Investments",
+    "Code": "26S2-731IV_013686"
+   },
+   "Access": {
+    "IsActive": true,
+    "CanAccess": true
+   }
+  }
+ ]
+}

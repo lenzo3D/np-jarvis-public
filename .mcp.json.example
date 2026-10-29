@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "school": {
+      "command": "/path/to/politemalljarvis/.venv/bin/python",
+      "args": ["-m", "school_mcp.server"],
+      "cwd": "/path/to/politemalljarvis",
+      "env": {"OPS_SOCKET": "/path/to/politemalljarvis/state/ops.sock"}
+    }
+  }
+}

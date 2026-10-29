@@ -1,0 +1,24 @@
+[Unit]
+Description=JARVIS ops (Ops bot, watcher, local API)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=jarvis-ops
+Group=jarvis-share
+WorkingDirectory=/opt/politemalljarvis
+Environment=SECRETS_FILE=/opt/politemalljarvis/secrets.env
+Environment=OPS_SOCKET=/run/jarvis/ops.sock
+Environment=CLAUDE_RUN_AS=jarvis
+Environment=CLAUDE_BIN=/home/jarvis/.local/bin/claude
+Environment=PYTHONUNBUFFERED=1
+Environment=TELETHON_EXTERNAL=1
+RuntimeDirectory=jarvis
+RuntimeDirectoryMode=0750
+UMask=0002
+ExecStart=/opt/politemalljarvis/.venv/bin/python -m ops.main
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

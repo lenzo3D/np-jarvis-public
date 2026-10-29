@@ -1,0 +1,17 @@
+[Unit]
+Description=JARVIS class group reader (Telethon, read-only)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=jarvis-ops
+Group=jarvis-ops
+WorkingDirectory=/opt/politemalljarvis
+Environment=SECRETS_FILE=/opt/politemalljarvis/secrets.env
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/opt/politemalljarvis/.venv/bin/python -m ops.telethon_main
+Restart=always
+RestartSec=30
+
+[Install]
+WantedBy=multi-user.target
