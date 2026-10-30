@@ -1,7 +1,7 @@
 """Panel views of the Telegram groups JARVIS reads (read-only; there is no way to send from here)."""
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from core import groups, tg_group
 from ops import telethon_main
@@ -50,8 +50,19 @@ def overview(settings, db, ops_running: bool) -> dict:
     out = {**telegram_state(settings, db, ops_running), "dialogs": groups.dialogs(db), "chosen": []}
     for g in groups.configured(settings, db):
         st = stats.get(g["id"], {})
-        out["chosen"].append({**g, "messages": st.get("count", 0), "last": st.get("last")})
+        out["chosen"].append({**g, "messages": st.get("count", 0), "last": st.get("last"),
+                              "replies_today": reply_count(db, g["id"]) if g["kind"] == "reply" else 0})
+    out["reply_status"] = db.get_json_setting("group_reply_status", {}) or {}
+    out["paused"] = db.get_setting("paused") == "1"
     return out
+
+
+def reply_count(db, chat_id: int) -> int:
+    since = (datetime.now(timezone.utc) - timedelta(days=1)).isoformat()
+    try:
+        return db.conn.execute("select count(*) from group_replies where chat_id=? and ts>=?", (chat_id, since)).fetchone()[0]
+    except Exception:  # noqa: BLE001 - table missing on a very old database
+        return 0
 
 
 def messages(settings, db, chat_id: int, query: str = "", limit: int = 150) -> dict:

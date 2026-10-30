@@ -213,3 +213,31 @@ def test_listener_message_is_reported_so_the_panel_can_say_why(settings):
     db.set_json_setting("telethon_status", {"state": "login_needed", "at": datetime.now(timezone.utc).isoformat()})
     st = chats.telegram_state(settings, db, True)
     assert st["telethon"] == "ready" and st["listener"] == "login_needed" and st["listener_message"] == ""
+
+
+def test_overview_reports_reply_activity_only_for_reply_groups(settings):
+    db = db_with_groups(settings)
+    groups.save_dialogs(db, [{"id": PROJECT, "name": "FYP Team"}, {"id": CLASS, "name": "Class"}])
+    groups.save(db, [{"id": PROJECT, "label": "Team", "kind": "reply"}, {"id": CLASS, "label": "Class", "kind": "class"}])
+    db.conn.execute("insert into group_replies(ts, chat_id, in_msg_id, text) values (?,?,?,?)", (NOW.isoformat(), PROJECT, 1, "ok"))
+    db.conn.execute("insert into group_replies(ts, chat_id, in_msg_id, text) values (?,?,?,?)",
+                    ((NOW - timedelta(days=3)).isoformat(), PROJECT, 2, "old"))
+    out = chats.overview(settings, db, True)
+    by_id = {g["id"]: g for g in out["chosen"]}
+    assert by_id[PROJECT]["replies_today"] == 1 and by_id[CLASS]["replies_today"] == 0
+    assert out["paused"] is False and out["reply_status"] == {}
+    db.set_setting("paused", "1")
+    assert chats.overview(settings, db, True)["paused"] is True
+
+
+async def test_endpoint_accepts_the_reply_kind(settings):
+    db = db_with_groups(settings)
+    groups.save_dialogs(db, [{"id": PROJECT, "name": "FYP Team"}])
+    sup = OpsSupervisor(settings, Prefs(settings.state_dir / "ui.json"))
+    c = TestClient(TestServer(make_app(settings, sup, port=8765, db=db)))
+    await c.start_server()
+    try:
+        r = await (await c.post("/api/chats/groups", headers=H, data=json.dumps({"groups": [{"id": PROJECT, "label": "T", "kind": "reply"}]}))).json()
+        assert r["groups"][0]["kind"] == "reply"
+    finally:
+        await c.close()

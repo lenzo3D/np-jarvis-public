@@ -14,7 +14,11 @@ it in plain language, from Telegram or from a local control panel.
 - **Morning briefing.** One short message each morning: classes, what is due, what changed.
 - **Announcements and Teams.** Tells you when a lecturer posts something new.
 - **Class and project group chats (optional).** Reads the Telegram groups you choose and summarises them. It only
-  reads. It never replies in a group, and nobody in the group can talk to it.
+  reads. By default it never replies in a group, and nobody in the group can talk to it.
+- **Auto-reply (optional, off by default).** Mark a group as **Reply** in the Chats tab and JARVIS answers there
+  automatically, from your own Telegram account, using only that group's chat, your upcoming deadlines and course
+  material. It never sees your email or your other chats, and it is limited to 20 replies an hour per group.
+  `/pause` in Telegram stops it at once.
 - **School email (optional).** Reads Outlook mail and alerts you to important messages.
 - **Ask it anything.** "What is due this week?", "Find the week 5 notes on cash flow", "Do my tutorial" (it shows
   you the result first).

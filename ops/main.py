@@ -158,7 +158,11 @@ async def amain() -> None:
             return
         from ops import telethon_main
 
-        svc.extra["telegram_task"] = asyncio.create_task(telethon_main.listen(svc.settings, svc.db))
+        from ops.group_reply import GroupReplier
+
+        replier = GroupReplier(svc)
+        svc.extra["group_replier"] = replier
+        svc.extra["telegram_task"] = asyncio.create_task(telethon_main.listen(svc.settings, svc.db, on_message=replier.on_message))
 
     starters.append(telegram_listener)
     async with app:

@@ -1,4 +1,5 @@
-"""Telethon listener for your Telegram groups (class, project...), logged in as you. Read-only by construction.
+"""Telethon listener for your Telegram groups (class, project...), logged in as you. It only reads, with one opt-in
+exception: groups you mark "reply" can be answered through `on_message` (ops/group_reply.py), never anywhere else.
 
 Normally it runs inside Ops (see ops/main.py) and the panel handles the one-time login. Standalone, for a server:
 
@@ -86,7 +87,7 @@ async def _refresh_dialogs(client, db) -> None:
     groups.save_dialogs(db, found)
 
 
-async def _watch(client, settings, db, poll: float) -> None:
+async def _watch(client, settings, db, poll: float, on_message=None) -> None:
     """One authorised connection: mirror the chosen groups into the database until the connection drops."""
     backfilled: set[int] = set()
 
@@ -98,6 +99,11 @@ async def _watch(client, settings, db, poll: float) -> None:
         gm = to_group_message(event.chat_id, msg)
         if gm:
             tg_group.store_message(db, gm)
+            # Only groups the user marked "reply", only other people's messages (never your own or a bot's): no loops.
+            sender = getattr(msg, "sender", None)
+            if (on_message is not None and gm and not getattr(event, "out", False) and not getattr(sender, "bot", False)
+                    and groups.kind_of(settings, db, event.chat_id) == "reply"):
+                asyncio.create_task(on_message(client, event.chat_id, gm))
 
     client.add_event_handler(on_new, events.NewMessage())
     last_dialogs: float | None = None  # None: refresh the group list on the first pass, whatever the uptime
@@ -114,7 +120,7 @@ async def _watch(client, settings, db, poll: float) -> None:
         await asyncio.sleep(poll)
 
 
-async def listen(settings, db, client_factory=client_for, poll: float = 30.0, ready=session_ready) -> None:
+async def listen(settings, db, client_factory=client_for, poll: float = 30.0, ready=session_ready, on_message=None) -> None:
     """Keep a Telegram connection alive for the lifetime of the process. Runs inside Ops (or standalone).
     Waits quietly for a login, picks up newly chosen groups within `poll` seconds, and reconnects after errors."""
     if not settings.telethon_api_id or not settings.telethon_api_hash:
@@ -129,7 +135,7 @@ async def listen(settings, db, client_factory=client_for, poll: float = 30.0, re
         try:
             await client.connect()
             if await client.is_user_authorized():
-                await _watch(client, settings, db, poll)
+                await _watch(client, settings, db, poll, on_message)
             else:
                 _status(db, "login_needed")
         except asyncio.CancelledError:

@@ -1,11 +1,12 @@
 """Which Telegram groups JARVIS reads and what they are called.
 
 The user picks groups in the panel (stored in the database); GROUP_CHAT_IDS in secrets.env is the fallback.
-Each group has a label ("Class", "Project team") and a kind: class, project or other.
+Each group has a label ("Class", "Project team") and a kind: class, project, reply or other.
+A "reply" group is read like the others AND answered automatically from the user's own account (ops/group_reply.py).
 """
 from __future__ import annotations
 
-KINDS = ("class", "project", "other")
+KINDS = ("class", "project", "reply", "other")
 MAX_GROUPS = 10
 DEFAULT_LABEL = "Class chat"  # used when messages exist but no group has been configured at all
 
@@ -40,6 +41,13 @@ def save(db, groups: list[dict]) -> list[dict]:
             cleaned.append(c)
     db.set_json_setting("group_chats", cleaned)
     return cleaned
+
+
+def kind_of(settings, db, chat_id: int) -> str | None:
+    for g in configured(settings, db):
+        if g["id"] == chat_id:
+            return g["kind"]
+    return None
 
 
 def ids(settings, db) -> list[int]:

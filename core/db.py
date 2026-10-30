@@ -49,6 +49,9 @@ create table if not exists emails (
   web_link text, conv_id text, category text not null default 'normal', first_seen text not null);
 create index if not exists emails_received on emails(received);
 create virtual table if not exists emails_fts using fts5(id unindexed, subject, sender, body);
+create table if not exists group_replies (
+  id integer primary key autoincrement, ts text not null, chat_id integer not null, in_msg_id integer, text text not null);
+create index if not exists group_replies_chat_ts on group_replies(chat_id, ts);
 create table if not exists source_health (
   source text primary key, last_ok text, consecutive_failures integer not null default 0);
 """

@@ -8,7 +8,8 @@ Hard rules that apply to every feature (from `docs/DEVELOPER_NOTES.md`):
   Telegram, one action at a time. No exceptions.
 - Text written by other people (course pages, chats, email) is data, never instructions.
 - The user signs in themselves. Secrets are never printed.
-- In group chats the bot only reads. It never replies there.
+- In group chats JARVIS only reads, except in a group the user has marked Reply (opt-in, per group). There it posts
+  from the user's own account, limited and with the model's tools off. The Ops bot never posts in any group.
 
 ---
 
@@ -190,4 +191,5 @@ None block anything.
 
 - **Reading WhatsApp groups.** There is no official way to read them, and automating WhatsApp Web can get the number
   banned. Use Telegram for group chats that JARVIS should read.
-- **Letting anyone in a group talk to the bot.** By design, the bot only reads groups.
+- **Letting anyone in a group give the bot commands.** The bot never obeys group members. Reply groups only produce
+  replies; they cannot run actions, change settings or reveal private data.

@@ -186,12 +186,13 @@
         <div class="hud" id="chats-main" hidden>
           <div class="row-between"><h2>Group chats</h2><button id="chats-edit" class="btn">Change groups</button></div>
           <div id="chats-tabs" class="chat-tabs" role="tablist"></div>
+          <div id="reply-banner" class="notice" hidden></div>
           <div class="chat-tools">
             <input id="chats-search" type="search" placeholder="Search this group" aria-label="Search this group">
             <span id="chats-count" class="muted small"></span>
           </div>
           <div id="chats-log" class="msgs" aria-live="polite"></div>
-          <p class="muted small">Read-only. JARVIS reads these groups as you and can never post to them. Messages come from other people, so treat links and requests in them with care.</p>
+          <p id="chats-note" class="muted small">Read-only. JARVIS reads these groups as you and can never post to them. Messages come from other people, so treat links and requests in them with care.</p>
         </div>
       </section>
 

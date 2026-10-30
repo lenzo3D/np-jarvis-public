@@ -370,7 +370,8 @@ function pickForm(state) {
     const c = chosen[d.id];
     const box = el("input", { type: "checkbox" }); box.checked = !!c;
     const label = el("input", { type: "text", placeholder: "Name, e.g. Project team", value: c ? c.label : d.name, maxlength: "40" });
-    const kind = el("select", {}, ...["class", "project", "other"].map((k) => el("option", { value: k }, k[0].toUpperCase() + k.slice(1))));
+    const KIND_LABEL = { class: "Class", project: "Project", reply: "Reply (auto-reply as you)", other: "Other" };
+    const kind = el("select", {}, ...["class", "project", "reply", "other"].map((k) => el("option", { value: k }, KIND_LABEL[k])));
     kind.value = c ? c.kind : "other";
     const row = el("div", { class: "pick-row" }, box, el("span", { class: "nm" }, d.name), label, kind);
     row.dataset.id = d.id; row._get = () => ({ on: box.checked, id: d.id, label: label.value, kind: kind.value });
@@ -380,11 +381,17 @@ function pickForm(state) {
   const note = el("span", { class: "muted small" }, "");
   save.addEventListener("click", async () => {
     const picked = rows.map((r) => r._get()).filter((g) => g.on).map(({ id, label, kind }) => ({ id, label, kind }));
+    const newReply = picked.filter((g) => g.kind === "reply" && !(chosen[g.id] && chosen[g.id].kind === "reply"));
+    if (newReply.length && !confirm("Reply mode: JARVIS will post replies in " + newReply.map((g) => '"' + g.label + '"').join(", ") +
+        " automatically, from YOUR Telegram account, with no approval step. People in the group will see them as coming from you. " +
+        "JARVIS limits itself to 20 replies an hour per group and only uses that group's chat, your upcoming deadlines and course material. " +
+        "Pause everything any time with /pause in Telegram.\n\nTurn on reply mode?")) return;
     const r = await api("/api/chats/groups", "POST", { groups: picked });
     note.textContent = r.ok ? "Saved. JARVIS starts reading them within a minute." : "Could not save.";
     if (r.ok) { chatsEditing = false; chatGroup = null; setTimeout(loadChats, 600); }
   });
   return [el("p", {}, "Tick the groups JARVIS should read, give each a name, and say what it is. Class and project groups are summarised and checked for dates and deadlines separately."),
+    el("p", { class: "muted small" }, "Reply groups are read the same way and also answered automatically from your own Telegram account. Use it only where you want that."),
     el("div", { class: "pick-list" }, ...rows), el("div", { class: "btn-row" }, save, note)];
 }
 /* A saved Telegram session file only proves a login was STARTED. What the group reader itself reports decides what to show. */
@@ -423,6 +430,18 @@ function renderChatsMain(state) {
     b.addEventListener("click", () => { chatGroup = g.id; $("chats-search").value = ""; renderChatsMain(state); loadChatMessages(); });
     return b;
   }));
+  const reply = state.chosen.filter((g) => g.kind === "reply");
+  const banner = $("reply-banner");
+  banner.hidden = !reply.length;
+  if (reply.length) {
+    const rs = state.reply_status || {};
+    const bits = reply.map((g) => `${g.label}: ${g.replies_today} repl${g.replies_today === 1 ? "y" : "ies"} in the last 24 hours`);
+    banner.textContent = "Auto-reply is ON for " + bits.join("; ") + "." + (state.paused ? " Currently PAUSED: nothing is being posted." : "") +
+      (rs.state === "error" ? " Last problem: " + (rs.message || "an error") + "." : rs.state === "limit" ? " Limit reached: " + rs.message + "." : "") + " /pause in Telegram stops all replies.";
+  }
+  $("chats-note").textContent = reply.length
+    ? "Replies in reply groups are posted from your own account. Messages come from other people, so treat links and requests in them with care."
+    : "Read-only. JARVIS reads these groups as you and can never post to them. Messages come from other people, so treat links and requests in them with care.";
   loadChatMessages();
 }
 async function loadChatMessages() {

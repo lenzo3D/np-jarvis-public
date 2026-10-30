@@ -3,7 +3,7 @@
 Only ALLOWED_TELEGRAM_ID can trigger any handler, and only in a PRIVATE chat with the bot.
 
 In group chats the bot is a silent reader: it records the text of the groups you chose (for summaries, search and
-date extraction) and does nothing else. It never replies, never answers commands, mentions or buttons there (even from
+date extraction) and does nothing else. It never replies (replies in groups marked "reply" go out through the user's own account in ops/group_reply.py, not this bot), never answers commands, mentions or buttons there (even from
 you, so nothing private can leak into a group), and it leaves any group that someone other than you adds it to.
 Everything it sends goes to the owner's private chat only (see Notifier).
 """
