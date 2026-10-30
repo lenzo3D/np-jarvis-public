@@ -258,8 +258,14 @@
         <div class="hud">
           <h2>Logins &amp; Checks</h2>
           <ul id="tool-status" class="rows"></ul>
-          <p class="muted">You only need these when a connection is red. They open a browser window on this computer where needed, and Microsoft sign-in numbers are also sent to you on Telegram. If a window reports that the profile is in use, stop JARVIS first.</p>
-          <div id="tool-buttons" class="btn-row"></div>
+          <div class="connect-main">
+            <div id="connect-main" class="btn-row"></div>
+            <p class="muted">Logs in to POLITEMall, Teams and Outlook (and Google Calendar if you set it up), then checks that each one really works. Sites that are already connected are only checked. A browser window opens when a sign-in is needed, and Microsoft's number is also sent to you on Telegram. JARVIS pauses while this runs and restarts by itself.</p>
+          </div>
+          <details class="more-tools">
+            <summary>Individual logins and checks</summary>
+            <div id="tool-buttons" class="btn-row"></div>
+          </details>
           <div class="row-between"><h3 id="job-title">Output</h3><button id="job-cancel" class="btn" hidden>Cancel</button></div>
           <pre id="job-output" class="log small-log">No task has been run yet.</pre>
         </div>

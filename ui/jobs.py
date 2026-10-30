@@ -9,6 +9,8 @@ from ui.supervisor import REPO
 
 PY = sys.executable
 JOBS = {
+    # The one button most people need: logs in to everything, then checks each connection works.
+    "connect_all": {"label": "Connect everything", "cmd": [PY, "scripts/connect_all.py"], "exclusive": True, "timeout": 30 * 60},
     # "exclusive": uses a browser profile that JARVIS keeps open, so the panel pauses JARVIS while the job runs
     "login_brightspace": {"label": "Log in to POLITEMall", "cmd": [PY, "-m", "core.auth", "login", "brightspace", "--show"], "exclusive": True, "clears": "auth_prompted:brightspace"},
     "login_teams": {"label": "Log in to Teams", "cmd": [PY, "-m", "core.auth", "login", "teams", "--show"], "exclusive": True, "clears": "auth_prompted:teams"},
@@ -49,7 +51,7 @@ class Jobs:
             return {"ok": False, "message": "Another task is still running."}
         spec = self.table[job_id]
         self.current = {"id": job_id, "label": spec["label"], "state": "running", "output": note, "started": time.time(),
-                        "clears": spec.get("clears")}
+                        "clears": spec.get("clears"), "timeout": spec.get("timeout")}
         self._task = asyncio.get_running_loop().create_task(self._run(spec["cmd"], on_finish))
         return {"ok": True, "message": f"{spec['label']} started."}
 
@@ -63,7 +65,7 @@ class Jobs:
             proc = await asyncio.create_subprocess_exec(*cmd, cwd=str(REPO), stdin=asyncio.subprocess.DEVNULL,
                                                         stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT)
             job["proc"] = proc
-            deadline = time.monotonic() + TIMEOUT
+            deadline = time.monotonic() + (job.get("timeout") or TIMEOUT)
             while True:
                 line = await asyncio.wait_for(proc.stdout.readline(), max(1, deadline - time.monotonic()))
                 if not line:

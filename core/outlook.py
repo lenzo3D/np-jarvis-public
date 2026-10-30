@@ -37,7 +37,7 @@ SELECT = {
             "InferenceClassification,Body",
 }
 TOKEN_REUSE_MARGIN = 120
-_TOKEN_JS = """async () => {
+_TOKEN_JS = r"""async () => {
   // Newer Microsoft sign-in code (msal-browser 4.x) keeps its token cache in localStorage ENCRYPTED: each entry is
   // {id, nonce, data}, AES-GCM with a key derived (HKDF-SHA256, salt = nonce) from the base key stored in the
   // "msal.cache.encryption" cookie. The page can read both, so we decrypt here, in the page, exactly as the app does.
@@ -109,6 +109,18 @@ _OWA_SERVICE_JS = """async () => {
     return {status: r.status, canary: !!m};
   } catch (e) { return {status: 0, canary: !!m, error: String(e).slice(0, 80)}; }
 }"""
+
+
+def remember_probe(db, report: dict, now: datetime) -> bool:
+    """Store what the access check found so the panel's indicator and the email sweep agree with it. True = mail can be read."""
+    if report.get("strategy"):
+        db.set_setting("outlook_strategy", report["strategy"])
+        db.set_setting("auth_prompted:outlook", "0")
+        db.record_health("outlook", True, now)  # the red "could not read" state is over
+        db.set_json_setting("outlook_status", {"state": "ok", "strategy": report["strategy"], "at": now.isoformat()})
+        return True
+    db.set_json_setting("outlook_status", {"state": "no_access", "message": "access check found no working method", "at": now.isoformat()})
+    return False
 
 
 class MailUnavailable(Exception):

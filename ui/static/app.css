@@ -351,3 +351,10 @@ input[type=checkbox] { accent-color: var(--cyan); }
 .wiz-steps span.on { background: var(--cyan); }
 .wiz-actions { display: flex; gap: 10px; margin-top: 18px; flex-wrap: wrap; }
 .wiz-card a { color: var(--cyan-2); }
+
+/* ---------- consolidated connect button ---------- */
+.connect-main { margin: 6px 0 14px; }
+.btn-big { padding: 14px 28px; font-size: 18px; letter-spacing: .06em; }
+.more-tools { margin: 10px 0 14px; }
+.more-tools summary { cursor: pointer; color: var(--muted); padding: 6px 0; }
+.more-tools .btn-row { margin-top: 8px; }

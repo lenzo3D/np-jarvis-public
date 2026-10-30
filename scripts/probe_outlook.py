@@ -15,7 +15,7 @@ from datetime import datetime, timezone
 from core.auth import AuthRequired, SessionManager
 from core.config import load_settings
 from core.db import DB
-from core.outlook import Outlook
+from core.outlook import Outlook, remember_probe
 
 
 async def notify(site, number):
@@ -71,14 +71,9 @@ async def main() -> int:
     db = DB(settings.db_path)
     db.init()
     now = datetime.now(timezone.utc)
-    if report["strategy"]:
-        db.set_setting("outlook_strategy", report["strategy"])
-        db.set_setting("auth_prompted:outlook", "0")
-        db.record_health("outlook", True, now)  # the red "could not read" state is over
-        db.set_json_setting("outlook_status", {"state": "ok", "strategy": report["strategy"], "at": now.isoformat()})
+    if remember_probe(db, report, now):
         print(f"\nRESULT: JARVIS can read your school email using '{report['strategy']}'. New mail is checked every 10 minutes.")
         return 0
-    db.set_json_setting("outlook_status", {"state": "no_access", "message": "access check found no working method", "at": now.isoformat()})
     print("\nRESULT: none of the known methods could read the mailbox. Copy everything above and send it on;")
     print("it shows exactly which method to add next. Nothing was changed in your mailbox.")
     return 1

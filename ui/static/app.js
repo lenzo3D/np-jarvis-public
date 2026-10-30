@@ -568,11 +568,13 @@ async function loadTools() {
   const { data } = await api("/api/jobs");
   if (!data) return;
   if (!jobsLoaded) {
-    fill($("tool-buttons"), ...data.jobs.map((j) => {
-      const b = el("button", { class: "btn", "data-job": j.id, "data-label": j.label }, j.label);
+    const make = (j) => {
+      const b = el("button", { class: j.id === "connect_all" ? "btn btn-primary btn-big" : "btn", "data-job": j.id, "data-label": j.label }, j.label);
       b.addEventListener("click", () => runJob(j.id));
       return b;
-    }));
+    };
+    fill($("connect-main"), ...data.jobs.filter((j) => j.id === "connect_all").map(make));
+    fill($("tool-buttons"), ...data.jobs.filter((j) => j.id !== "connect_all").map(make));
     jobsLoaded = true;
     styleToolButtons();
   }
@@ -669,7 +671,7 @@ function renderWizard(err) {
       el("div", { class: "wiz-actions" }, back(), next("Finish setup", async () => {
         const r = await wizPost("save", { token: wiz.token, owner_id: wiz.ownerId, school_user: wiz.user, school_pass: wiz.pass, school_base: wiz.base, name: name.value, address: addr.value });
         if (!r.ok) return renderWizard(r.error);
-        fill(body, el("p", {}, "Saved. JARVIS is restarting; this page reloads by itself. Then sign in to POLITEMall and Teams from the Tools tab."));
+        fill(body, el("p", {}, "Saved. JARVIS is restarting; this page reloads by itself. Then open Logins & Tools and press Connect everything."));
         waitForRestart();
       })));
   }

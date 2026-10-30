@@ -57,15 +57,18 @@ The control panel opens a setup wizard the first time:
 3. **POLITEMall login.** Your student ID and password.
 4. **About you.** Your name and how JARVIS should address you.
 
-Then, in the **Logins & Tools** tab, sign in to POLITEMall and Teams once (you do the sign-in and any phone approval
-yourself), and press **Start** at the top. The indicators next to the clock turn green when everything is live.
+Then open the **Logins & Tools** tab and press **Connect everything**. It signs in to POLITEMall, Teams and Outlook
+one after the other (you do the sign-in and any phone approval yourself; Microsoft's number is also sent to your
+Telegram), then checks that each one really works and prints a summary. JARVIS restarts by itself afterwards. The
+indicators next to the clock turn green when everything is live. Press the same button again any time something
+turns red.
 
 Optional extras, each from the panel:
 
 - **Google Calendar:** see [docs/GOOGLE_CALENDAR.md](docs/GOOGLE_CALENDAR.md).
 - **Group chats:** add your bot to the group (turn off its privacy mode in @BotFather: `/setprivacy` then Disable),
   then tick the group in the **Chats** tab.
-- **School email:** sign in to Outlook from **Logins & Tools**, then run "Check Outlook email access".
+- **School email:** included in **Connect everything**.
 - **Start at login (Mac):** `scripts/install_launchagent.sh`
 
 Set `SEMESTER_START` in `secrets.env` to the Monday of week 1 so "Week 9" in teaching plans becomes a real date.
