@@ -42,7 +42,7 @@ def build_services():
     bs = Brightspace(sessions, settings.politemall_base, settings.course_prefix)
     services = watcher.Services(settings=settings, db=db, sessions=sessions, bs=bs, notifier=notifier,
                                 teams=Teams(sessions))
-    services.extra.update(app=app, hooks=hooks, router=router, outlook=Outlook(sessions, db.get_setting("outlook_strategy")))
+    services.extra.update(app=app, hooks=hooks, router=router, outlook=Outlook(sessions, strategy=db.get_setting("outlook_strategy")))
     _wire(services)
     return services
 

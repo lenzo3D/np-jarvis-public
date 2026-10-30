@@ -159,7 +159,7 @@ def _best_first(ep: dict, tokens: list[dict]) -> list[dict]:
 
 
 class Outlook:
-    def __init__(self, session, token_provider: Callable[[], Awaitable[list[dict]]] | None = None,
+    def __init__(self, session, *, token_provider: Callable[[], Awaitable[list[dict]]] | None = None,
                  strategy: str | None = None, timeout: float = 30.0):
         self.session = session
         self._provider = token_provider or self._browser_tokens
