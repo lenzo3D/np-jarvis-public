@@ -9,6 +9,7 @@ content, exactly what was tried and what came back; it is what the panel's "Chec
 """
 from __future__ import annotations
 
+import asyncio
 import base64
 import json
 import logging
@@ -206,11 +207,26 @@ class Outlook:
                 "Prefer": 'outlook.body-content-type="text"'})
 
     # ---------- diagnostics ----------
-    async def probe(self) -> dict:
-        """What can this login read? No message content is returned, only statuses and token audiences/scopes."""
-        report = {"tokens": [], "attempts": [], "strategy": None, "owa_service": None, "storage": None, "token_cache": None}
-        tokens = await self._tokens(fresh=True)
+    async def probe(self, progress=None, step_timeout: float = 150.0) -> dict:
+        """What can this login read? No message content is returned, only statuses and token audiences/scopes.
+        `progress(text)` is called before each step, and every step has a time limit, so a stall is visible and the
+        report is always returned (with the stalled step named in report["errors"])."""
+        say = progress or (lambda _m: None)
+        report = {"tokens": [], "attempts": [], "strategy": None, "owa_service": None, "storage": None, "token_cache": None,
+                  "errors": []}
+        say("Step 1 of 3: reading the sign-in tokens that Outlook keeps in the browser (up to 2 minutes)...")
+        try:
+            tokens = await asyncio.wait_for(self._tokens(fresh=True), step_timeout)
+        except asyncio.TimeoutError:
+            tokens = []
+            report["errors"].append("step 1 (reading tokens) did not finish in time")
+        except AuthRequired:
+            raise
+        except Exception as e:  # noqa: BLE001 - report it instead of losing the rest of the diagnosis
+            tokens = []
+            report["errors"].append(f"step 1 (reading tokens) failed: {type(e).__name__}")
         report["token_cache"] = self.token_diag or None
+        say(f"Step 2 of 3: trying to read the inbox with {len(tokens)} token(s)...")
         for t in tokens:
             c = t["claims"]
             report["tokens"].append({"aud": c.get("aud"), "scopes": sorted(str(c.get("scp") or "").split()),
@@ -233,7 +249,11 @@ class Outlook:
                                            "ok": r.status_code == 200, "error": err})
                 if r.status_code == 200 and report["strategy"] is None:
                     report["strategy"] = ep["name"]
-        report["owa_service"], report["storage"] = await self._probe_page()
+        say("Step 3 of 3: checking Outlook's own web service (up to 2 minutes)...")
+        try:
+            report["owa_service"], report["storage"] = await asyncio.wait_for(self._probe_page(), step_timeout)
+        except asyncio.TimeoutError:
+            report["errors"].append("step 3 (Outlook web service) did not finish in time")
         if report["strategy"]:
             self.strategy = report["strategy"]
         return report
