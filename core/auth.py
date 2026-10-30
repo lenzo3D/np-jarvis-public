@@ -9,8 +9,10 @@ import asyncio
 import fcntl
 import json
 import os
+import logging
 import re
 import sys
+import time
 from pathlib import Path
 from typing import Awaitable, Callable, Literal
 
@@ -37,6 +39,13 @@ TEAMS_URL = "https://teams.microsoft.com/v2/"
 OUTLOOK_URL = "https://outlook.office.com/mail/"
 OUTLOOK_URL_RE = re.compile(r"https://outlook\.(office|office365|live)\.com/")
 MFA_TIMEOUT = 300.0
+SILENT_WAIT = 45  # seconds a silent renewal may take (Microsoft's redirects can be slow after the Mac wakes up)
+REFRESH_COOLDOWN = 120.0  # do not retry a silent renewal more often than this
+log = logging.getLogger(__name__)
+
+
+def _ckey(c: dict) -> tuple:
+    return (c.get("name"), str(c.get("domain", "")).lstrip("."), c.get("path", "/"))
 
 
 class AuthRequired(Exception):
@@ -111,6 +120,7 @@ class SessionManager:
         self._pw = None
         self._contexts: dict[str, object] = {}
         self.login_in_progress: set[str] = set()
+        self._last_refresh: dict[str, tuple[float, bool]] = {}
 
     # ---------- browser ----------
     def session_dir(self, site: str) -> Path:
@@ -162,10 +172,33 @@ class SessionManager:
             return
         try:
             cookies = json.loads(path.read_text())
-            if cookies:
-                await ctx.add_cookies(cookies)
+            if not cookies:
+                return
+            # The saved copy can be older than what the browser profile already holds: only fill in what is missing,
+            # never overwrite a fresher cookie with a stale one.
+            have = {_ckey(c) for c in await ctx.cookies()}
+            missing = [c for c in cookies if _ckey(c) not in have]
+            if missing:
+                await ctx.add_cookies(missing)
         except (OSError, ValueError):
             return
+
+    async def absorb(self, site: str, jar) -> None:
+        """Copy cookies the server refreshed during an httpx call back into the browser, so the session keeps rolling."""
+        ctx = self._contexts.get(site)
+        if ctx is None:
+            return
+        try:
+            live = {_ckey(c): c for c in await ctx.cookies()}
+            changed = []
+            for c in jar.jar:
+                cur = live.get((c.name, c.domain.lstrip("."), c.path))
+                if cur is not None and cur.get("value") != c.value:
+                    changed.append({**cur, "value": c.value})
+            if changed:
+                await ctx.add_cookies(changed)
+        except Exception:  # noqa: BLE001 - a failed sync must never break the request that triggered it
+            log.debug("cookie sync failed", exc_info=True)
 
     async def close(self) -> None:
         for site, ctx in self._contexts.items():
@@ -215,6 +248,53 @@ class SessionManager:
             if site == "outlook":
                 return await outlook_signed_in(page)
             return not is_login_page(page.url)
+        finally:
+            await page.close()
+
+    # ---------- silent renewal ----------
+    async def refresh(self, site: Site) -> bool:
+        """Try to bring a site's session back WITHOUT involving you: open it in the saved browser profile and let
+        Microsoft's own "stay signed in" cookies finish the sign-in. Never types a password and never asks for MFA.
+        True = the session works again. False = a real sign-in is needed."""
+        if site in self.login_in_progress:
+            return False
+        last = self._last_refresh.get(site)
+        if last and time.monotonic() - last[0] < REFRESH_COOLDOWN:
+            return last[1]
+        async with self._lock(site):
+            try:
+                ok = await self._refresh_live(site)
+            except Exception:  # noqa: BLE001 - treat any browser trouble as "not renewed"
+                log.warning("silent renewal of %s failed", site, exc_info=True)
+                ok = False
+            self._last_refresh[site] = (time.monotonic(), ok)
+            if ok:
+                await self.save_cookies(site)
+            return ok
+
+    async def _refresh_live(self, site: str) -> bool:
+        s = SELECTORS
+        ctx = await self.context(site)  # type: ignore[arg-type]
+        page = await ctx.new_page()
+        try:
+            url = (f"{self.settings.politemall_base}/d2l/home" if site == "brightspace"
+                   else OUTLOOK_URL if site == "outlook" else TEAMS_URL)
+            await page.goto(url, wait_until="domcontentloaded", timeout=60000)
+            for _ in range(SILENT_WAIT):
+                if site == "outlook":
+                    arrived = await outlook_signed_in(page, 1)
+                elif site == "teams":
+                    arrived = not is_login_page(page.url) and await page.locator(s["teams_ready"]).count() > 0
+                else:
+                    arrived = "/d2l/" in page.url and not is_login_page(page.url)
+                if arrived:
+                    return await self._checker(site) if site == "brightspace" else True
+                if await page.locator(f'{s["username"]}, {s["password"]}').first.is_visible():
+                    return False  # Microsoft wants real credentials: only you can do that
+                if await page.locator(s["kmsi_marker"]).count():
+                    await page.click(s["kmsi_yes"])
+                await page.wait_for_timeout(1000)
+            return False
         finally:
             await page.close()
 

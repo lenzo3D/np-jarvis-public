@@ -113,6 +113,30 @@ async def flush_batch(ctx: Services) -> None:
     ctx.db.set_json_setting("batch_queue", current[len(queue):])
 
 
+BROWSER_SITES = ("brightspace", "teams", "outlook")
+
+
+async def _renewed_quietly(ctx: Services, source: str) -> bool:
+    sessions = ctx.sessions
+    if source not in BROWSER_SITES or sessions is None or not hasattr(sessions, "refresh"):
+        return False
+    try:
+        return bool(await sessions.refresh(source))
+    except Exception:  # noqa: BLE001
+        log.warning("quiet renewal of %s crashed", source, exc_info=True)
+        return False
+
+
+async def _keep_cookies(ctx: Services, source: str) -> None:
+    """Keep the backup copy of the session cookies as fresh as the live ones."""
+    save = getattr(ctx.sessions, "save_cookies", None)
+    if source in BROWSER_SITES and save is not None:
+        try:
+            await save(source)
+        except Exception:  # noqa: BLE001
+            log.debug("cookie backup failed", exc_info=True)
+
+
 async def run_source(ctx: Services, source: str, collect: Callable[[], Awaitable[list[Item]]],
                      on_items: Callable[[list[Item]], None] | None = None) -> list[Change]:
     """Run one sweep with auth handling and failure accounting."""
@@ -120,20 +144,30 @@ async def run_source(ctx: Services, source: str, collect: Callable[[], Awaitable
     name = SOURCE_NAMES.get(source, source)
     prev = db.conn.execute("select consecutive_failures from source_health where source=?", (source,)).fetchone()
     prev_failures = prev[0] if prev else 0
-    try:
-        items = await collect()
-    except AuthRequired:
-        if db.get_setting(f"auth_prompted:{source}") != "1":
-            await ctx.notifier.send(f"{name} session expired. Alerts for it are paused until you log in.",
-                                    [[("Log in now", f"login:retry:{source}")]])
-            db.set_setting(f"auth_prompted:{source}", "1")
-        return []
-    except Exception as e:  # noqa: BLE001
-        log.exception("%s sweep failed", source)
-        n = db.record_health(source, False, now)
-        if n == 3:
-            await ctx.notifier.send(f"{name} checks failing (3 in a row): {type(e).__name__}: {e}"[:500])
-        return []
+    items = None
+    for attempt in (0, 1):
+        try:
+            items = await collect()
+            break
+        except AuthRequired as e:
+            # A slow redirect or a short outage looks the same as a real logout, so try to renew the session quietly
+            # first (browser profile + Microsoft's stay-signed-in cookies, no password, no MFA) and only then ask.
+            if attempt == 0 and await _renewed_quietly(ctx, source):
+                continue
+            if db.get_setting(f"auth_prompted:{source}") != "1":
+                reason = str(e).strip()
+                why = f"\nReason: {reason[:160]}" if reason and reason != source else ""
+                await ctx.notifier.send(f"{name} session expired. Alerts for it are paused until you log in.{why}",
+                                        [[("Log in now", f"login:retry:{source}")]])
+                db.set_setting(f"auth_prompted:{source}", "1")
+            return []
+        except Exception as e:  # noqa: BLE001
+            log.exception("%s sweep failed", source)
+            n = db.record_health(source, False, now)
+            if n == 3:
+                await ctx.notifier.send(f"{name} checks failing (3 in a row): {type(e).__name__}: {e}"[:500])
+            return []
+    await _keep_cookies(ctx, source)
     db.record_health(source, True, now)
     db.set_setting(f"auth_prompted:{source}", "0")
     if prev_failures >= 3:

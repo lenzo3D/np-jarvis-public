@@ -61,8 +61,10 @@ class Brightspace:
     @staticmethod
     def _check(r: httpx.Response) -> None:
         # Only 401 / redirect-to-login mean the session is gone. 403 = a tool is off in that course.
-        if r.status_code == 401 or (r.is_redirect and is_login_page(r.headers.get("location", ""))):
-            raise AuthRequired("brightspace")
+        if r.status_code == 401:
+            raise AuthRequired("brightspace: HTTP 401 (the server no longer accepts the saved session)")
+        if r.is_redirect and is_login_page(r.headers.get("location", "")):
+            raise AuthRequired("brightspace: redirected to the sign-in page")
         r.raise_for_status()
 
     async def _session_alive(self) -> bool:
@@ -80,6 +82,9 @@ class Brightspace:
     async def _get(self, path: str, **params) -> Any:
         async with await self._client() as c:
             r = await c.get(path, params=params or None)
+        absorb = getattr(self.session, "absorb", None)
+        if absorb is not None:
+            await absorb("brightspace", c.cookies)
         await self._check_async(r)
         return r.json()
 
