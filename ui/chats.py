@@ -42,7 +42,7 @@ def telegram_state(settings, db, ops_running: bool) -> dict:
     else:
         health = "stale"
     return {"stage": stage, "telethon": telethon, "health": health, "listener": status.get("state"),
-            "heartbeat_age": age, "groups": len(chosen), "bot_groups": len(bot_ids)}
+            "listener_message": str(status.get("message") or "")[:120], "ops_running": bool(ops_running), "heartbeat_age": age, "groups": len(chosen), "bot_groups": len(bot_ids)}
 
 
 def overview(settings, db, ops_running: bool) -> dict:

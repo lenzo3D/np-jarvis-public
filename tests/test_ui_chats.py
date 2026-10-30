@@ -202,3 +202,14 @@ async def test_endpoints_save_only_your_own_dialogs_and_serve_messages(settings)
         assert (await post("/api/telegram/login/nonsense", {})).status == 404
     finally:
         await c.close()
+
+
+def test_listener_message_is_reported_so_the_panel_can_say_why(settings):
+    db = db_with_groups(settings)
+    telethon_main.session_path(settings).write_text("x")
+    db.set_json_setting("telethon_status", {"state": "error", "message": "FloodWaitError", "at": datetime.now(timezone.utc).isoformat()})
+    st = chats.telegram_state(settings, db, True)
+    assert st["listener"] == "error" and st["listener_message"] == "FloodWaitError"
+    db.set_json_setting("telethon_status", {"state": "login_needed", "at": datetime.now(timezone.utc).isoformat()})
+    st = chats.telegram_state(settings, db, True)
+    assert st["telethon"] == "ready" and st["listener"] == "login_needed" and st["listener_message"] == ""

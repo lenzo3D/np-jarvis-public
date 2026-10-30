@@ -387,6 +387,20 @@ function pickForm(state) {
   return [el("p", {}, "Tick the groups JARVIS should read, give each a name, and say what it is. Class and project groups are summarised and checked for dates and deadlines separately."),
     el("div", { class: "pick-list" }, ...rows), el("div", { class: "btn-row" }, save, note)];
 }
+/* A saved Telegram session file only proves a login was STARTED. What the group reader itself reports decides what to show. */
+function ownAccountStatus(state) {
+  if (state.ops_running === false) return [el("p", {}, "JARVIS is stopped. Press Start at the top: the group reader runs inside JARVIS.")];
+  if (state.listener === "login_needed") {
+    return [el("p", { class: "form-err" }, "Telegram has not confirmed your login yet (the login may have been started but never finished). Log in again below."),
+      ...loginForm(state.login)];
+  }
+  if (state.listener === "error") {
+    return [el("p", { class: "form-err" }, "The Telegram reader hit an error" + (state.listener_message ? ": " + state.listener_message : "") + ". It retries every 30 seconds. If this stays, press Restart, and tell me the message if it keeps coming back.")];
+  }
+  if (state.listener === "listening") return [el("p", {}, "Connected to Telegram. Your groups are loading and will appear here within a minute.")];
+  return [el("p", {}, "Waiting for JARVIS's Telegram reader to connect (up to 30 seconds). If this stays for over a minute, press Restart at the top."),
+    el("p", { class: "muted small" }, "Reader status: " + (state.listener || "not reported yet"))];
+}
 function renderChatsSetup(state) {
   $("chats-main").hidden = true; $("chats-setup").hidden = false;
   if (state.stage === "pick") return setupBox("Choose your groups", ...pickForm(state));
@@ -398,7 +412,7 @@ function renderChatsSetup(state) {
     el("p", {}, "The bot sits in the group and only listens. It never posts, replies, or answers anyone: commands, mentions and buttons are ignored in groups, even from you, and it leaves a group at once if anyone else adds it. It reads from the moment it joins; it cannot see older messages."), botSteps);
   const own = el("details", { class: "method" }, el("summary", {}, "Option 2: read as yourself (also gets older messages)"),
     ...(state.telethon === "no_api_keys" ? [el("p", {}, "One-time setup: open my.telegram.org, log in, choose API development tools, create an app, and copy the api_id and api_hash into secrets.env as TELETHON_API_ID and TELETHON_API_HASH. Restart JARVIS, then come back here.")]
-      : state.telethon === "login" ? loginForm(state.login) : [el("p", {}, "You are logged in. Start JARVIS and your groups will appear here within a minute.")]));
+      : state.telethon === "login" ? loginForm(state.login) : ownAccountStatus(state)));
   setupBox("Connect your group chats", bot, own);
 }
 function renderChatsMain(state) {
