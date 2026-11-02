@@ -6,12 +6,13 @@ import json
 import logging
 import os
 import shutil
-import signal
 import socket
 import sys
 import time
 from collections import deque
 from pathlib import Path
+
+from core import hostos, localapi
 
 log = logging.getLogger(__name__)
 REPO = Path(__file__).resolve().parent.parent
@@ -21,6 +22,8 @@ STARTING_WINDOW = 90.0
 
 
 def socket_alive(path: Path) -> bool:
+    if not hasattr(socket, "AF_UNIX"):  # Windows
+        return False
     s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     s.settimeout(0.3)
     try:
@@ -32,6 +35,15 @@ def socket_alive(path: Path) -> bool:
         s.close()
 
 
+def ops_alive(settings) -> bool:
+    """Is Ops answering? Looks at how Ops says it can be reached (endpoint file); with no such file, falls back to
+    the Unix socket path from the settings."""
+    ep = localapi.read_endpoint(localapi.endpoint_path(settings))
+    if ep and ep["transport"] == "tcp":
+        return localapi.endpoint_alive(ep)
+    return socket_alive(Path(ep["path"]) if ep else settings.ops_socket)
+
+
 class Prefs:
     """Tiny JSON file for UI preferences (state/ui.json)."""
 
@@ -40,18 +52,18 @@ class Prefs:
 
     def get(self, key: str, default=None):
         try:
-            return json.loads(self.path.read_text()).get(key, default)
+            return json.loads(self.path.read_text(encoding="utf-8")).get(key, default)
         except (OSError, ValueError):
             return default
 
     def set(self, key: str, value) -> None:
         try:
-            data = json.loads(self.path.read_text())
+            data = json.loads(self.path.read_text(encoding="utf-8"))
         except (OSError, ValueError):
             data = {}
         data[key] = value
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        self.path.write_text(json.dumps(data))
+        self.path.write_text(json.dumps(data), encoding="utf-8")
 
 
 class OpsSupervisor:
@@ -78,20 +90,16 @@ class OpsSupervisor:
             return self.proc.returncode is None
         if self.pid is None:
             return False
-        try:
-            os.kill(self.pid, 0)
-            return True
-        except OSError:
-            return False
+        return hostos.pid_alive(self.pid)
 
     def adopt(self) -> None:
         """After a panel restart, take back an Ops this panel started earlier (found via its pid file)."""
         try:
-            pid = int(self.pid_path.read_text().strip())
+            pid = int(self.pid_path.read_text(encoding="utf-8").strip())
         except (OSError, ValueError):
             return
         self.pid = pid
-        if self.managed_running and socket_alive(self.settings.ops_socket):
+        if self.managed_running and ops_alive(self.settings):
             self.started_at = time.monotonic()
             self.desired = True
             self._ensure_watch()
@@ -100,10 +108,10 @@ class OpsSupervisor:
 
     def mode(self) -> str:
         if self.managed_running:
-            if socket_alive(self.settings.ops_socket):
+            if ops_alive(self.settings):
                 return "running"
             return "starting" if time.monotonic() - (self.started_at or 0) < STARTING_WINDOW else "unresponsive"
-        if socket_alive(self.settings.ops_socket):
+        if ops_alive(self.settings):
             return "external"
         return "restarting" if self.desired else "stopped"
 
@@ -123,7 +131,7 @@ class OpsSupervisor:
         async with self._lock:
             if self.managed_running:
                 return {"ok": True, "message": "JARVIS is already running."}
-            if socket_alive(self.settings.ops_socket):
+            if ops_alive(self.settings):
                 return {"ok": False, "message": "JARVIS is already running outside this panel (for example in a "
                                                 "terminal). Stop that one first, or two copies would fight over Telegram."}
             self._rotate_log()
@@ -131,11 +139,11 @@ class OpsSupervisor:
             try:
                 self.proc = await asyncio.create_subprocess_exec(
                     *self.command, cwd=str(self.cwd), stdout=logfile, stderr=asyncio.subprocess.STDOUT,
-                    start_new_session=True)
+                    env=hostos.child_env(), **hostos.new_group_kwargs())
             finally:
                 logfile.close()
             self.pid = self.proc.pid
-            self.pid_path.write_text(str(self.pid))
+            self.pid_path.write_text(str(self.pid), encoding="utf-8")
             self.started_at = time.monotonic()
             self.desired = True
             self._keep_awake(self.pid)
@@ -143,6 +151,9 @@ class OpsSupervisor:
             return {"ok": True, "message": "Starting JARVIS."}
 
     def _keep_awake(self, pid: int) -> None:
+        if hostos.is_windows():
+            hostos.set_windows_awake(True)
+            return
         exe = shutil.which("caffeinate")
         if exe and sys.platform == "darwin":
             try:
@@ -156,28 +167,25 @@ class OpsSupervisor:
         async with self._lock:
             self.desired = False
             if not self.managed_running:
-                if socket_alive(self.settings.ops_socket):
+                if ops_alive(self.settings):
                     return {"ok": False, "message": "JARVIS was started outside this panel, so it cannot be stopped here."}
                 return {"ok": True, "message": "JARVIS is not running."}
             pid = self.pid
-            try:
-                os.killpg(pid, signal.SIGTERM)
-            except ProcessLookupError:
-                pass
-            deadline = time.monotonic() + STOP_GRACE
+            asked = hostos.terminate_tree(pid)
+            # On Windows a polite request fails for a process without a window; then do not wait, just force.
+            deadline = time.monotonic() + (STOP_GRACE if asked else 0)
             while self.managed_running and time.monotonic() < deadline:
                 await asyncio.sleep(0.1)
             if self.managed_running:
-                try:
-                    os.killpg(pid, signal.SIGKILL)
-                except ProcessLookupError:
-                    pass
+                hostos.terminate_tree(pid, force=True)
                 for _ in range(50):
                     if not self.managed_running:
                         break
                     await asyncio.sleep(0.1)
             self.pid_path.unlink(missing_ok=True)
             self.proc = self.pid = None
+            if hostos.is_windows():
+                hostos.set_windows_awake(False)
             return {"ok": True, "message": "JARVIS stopped."}
 
     async def restart(self) -> dict:
@@ -230,4 +238,4 @@ class OpsSupervisor:
             size = fh.tell()
             fh.seek(max(0, size - 256 * 1024))
             data = fh.read()
-        return list(deque(data.decode(errors="replace").splitlines(), maxlen=n))
+        return list(deque(data.decode("utf-8", errors="replace").splitlines(), maxlen=n))

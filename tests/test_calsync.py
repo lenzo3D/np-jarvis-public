@@ -42,6 +42,14 @@ class FakeCal:
         self.events[eid] = body
         return eid
 
+    async def get(self, eid):
+        self.reads = getattr(self, "reads", 0) + 1
+        if self.auth_fail:
+            raise CalendarAuthRequired("x")
+        if eid in self.gone or eid not in self.events:
+            raise EventGone(eid)
+        return self.events[eid]
+
     async def patch(self, eid, body):
         self.writes += 1
         if eid in self.gone:
@@ -144,3 +152,85 @@ async def test_one_bad_event_does_not_block_others(db):
     store.upsert(dl(key="b", title="Fine"), T0)
     r = await sync(store, cal, NAMES, SGT)
     assert r.inserted == 1 and r.errors == 1 and store.get("b").gcal_event_id
+
+
+async def test_event_is_re_read_before_patch_and_unchanged_sync_reads_nothing(db):
+    store, cal = DeadlineStore(db), FakeCal()
+    store.upsert(dl(), T0)
+    await sync(store, cal, NAMES, SGT)
+    await sync(store, cal, NAMES, SGT)
+    assert getattr(cal, "reads", 0) == 0 and cal.writes == 1  # no change: zero reads, zero writes
+    store.upsert(dl(end_utc="2026-11-02T15:59:00+00:00", start_utc="2026-11-02T15:29:00+00:00"), T0)
+    r = await sync(store, cal, NAMES, SGT)
+    assert cal.reads == 1 and r.patched == 1
+
+
+async def test_event_deleted_in_google_is_tombstoned_before_patch(db):
+    store, cal = DeadlineStore(db), FakeCal()
+    store.upsert(dl(), T0)
+    await sync(store, cal, NAMES, SGT)
+    eid = store.get("bs:assignment:1:5").gcal_event_id
+    del cal.events[eid]  # gone from the calendar, but the patch would not have failed
+    writes = cal.writes
+    store.upsert(dl(title="Tutorial 5 (moved)"), T0)
+    r = await sync(store, cal, NAMES, SGT)
+    assert cal.writes == writes and r.user_deleted == 1 and store.is_user_deleted("bs:assignment:1:5")
+
+
+async def test_event_without_our_key_is_never_patched_or_deleted(db):
+    store, cal = DeadlineStore(db), FakeCal()
+    store.upsert(dl(), T0)
+    await sync(store, cal, NAMES, SGT)
+    eid = store.get("bs:assignment:1:5").gcal_event_id
+    cal.events[eid] = {"summary": "Dentist"}  # someone else's event now
+    writes = cal.writes
+    store.upsert(dl(title="Tutorial 5 (moved)"), T0)
+    await sync(store, cal, NAMES, SGT)
+    assert cal.writes == writes and cal.events[eid] == {"summary": "Dentist"}
+    store.upsert(dl(key="k2", title="Other"), T0)
+    await sync(store, cal, NAMES, SGT)
+    eid2 = store.get("k2").gcal_event_id
+    cal.events[eid2] = {"summary": "Not ours"}
+    store.mark_gone_missing("brightspace", set())
+    writes = cal.writes
+    await sync(store, cal, NAMES, SGT)
+    assert cal.writes == writes and eid2 in cal.events
+
+
+async def test_upgrade_with_existing_other_rows_makes_no_calendar_writes_and_keeps_the_due_moment(db):
+    from datetime import timedelta
+    from core.deadlines import local_date
+    from ops.gcal_events import event_body, event_hash
+    store, cal = DeadlineStore(db), FakeCal()
+    old = dl(key="p:1", title="CA2 Reflection", kind="other", start_utc="2026-11-10T15:29:00+00:00",
+             end_utc="2026-11-10T15:59:00+00:00")
+    store.upsert(old, T0)
+    # what the calendar held before the upgrade: the body of a "due block" (old behaviour for every "other")
+    body = event_body(old, NAMES[old.course_code], SGT)
+    store.set_event("p:1", "evold", event_hash(body))
+    cal.events["evold"] = body
+    r = await sync(store, cal, NAMES, SGT)
+    assert cal.writes == 0 and getattr(cal, "reads", 0) == 0 and (r.patched, r.inserted) == (0, 0)
+    d = store.get("p:1")
+    assert not d.as_event and local_date(d, SGT).isoformat() == "2026-11-10"
+    assert body["end"]["dateTime"].startswith("2026-11-10T23:59") and body["start"]["dateTime"].startswith("2026-11-10T23:29")
+    assert [o["minutes"] for o in body["reminders"]["overrides"]] == [1440, 180]
+
+
+async def test_transient_failure_of_the_re_read_is_an_error_not_a_tombstone(db):
+    import httpx
+    store, cal = DeadlineStore(db), FakeCal()
+    store.upsert(dl(), T0)
+    await sync(store, cal, NAMES, SGT)
+    eid = store.get("bs:assignment:1:5").gcal_event_id
+
+    async def boom(_eid):
+        raise httpx.HTTPStatusError("503", request=httpx.Request("GET", "http://x"), response=httpx.Response(503))
+
+    cal.get = boom
+    writes = cal.writes
+    store.upsert(dl(title="Tutorial 5 (moved)"), T0)
+    r = await sync(store, cal, NAMES, SGT)
+    d = store.get("bs:assignment:1:5")
+    assert r.errors == 1 and r.user_deleted == 0 and cal.writes == writes
+    assert d.status == "active" and d.gcal_event_id == eid and not store.is_user_deleted(d.key)

@@ -228,7 +228,7 @@ def test_only_the_reply_module_posts_to_groups():
     from pathlib import Path
     root = Path(__file__).resolve().parent.parent
     for rel in ["core/tg_group.py", "ops/telethon_main.py"]:  # the reader itself still cannot send anything
-        attrs = {n.attr for n in ast.walk(ast.parse((root / rel).read_text())) if isinstance(n, ast.Attribute)}
+        attrs = {n.attr for n in ast.walk(ast.parse((root / rel).read_text(encoding="utf-8"))) if isinstance(n, ast.Attribute)}
         assert "send_message" not in attrs
-    src = (root / "ops/group_reply.py").read_text()
+    src = (root / "ops/group_reply.py").read_text(encoding="utf-8")
     assert src.count("send_message(") == 1  # one place, behind every limit

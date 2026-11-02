@@ -202,3 +202,84 @@ async def test_failed_red_alert_is_retried(db, env_file):
     texts = [m for m, _ in s.notifier.messages]
     assert sum("Tutorial" in t for t in texts if t.startswith("[Urgent]")) == 2
     assert db.get_json_setting("retry_queue", []) == []
+
+
+async def test_new_course_sends_one_summary_line_not_a_flood(db, env_file):
+    from ops.watcher import run_source
+    s = services(db, env_file)
+    n = s.notifier
+    db.set_json_setting("course_names", {"NEW1": "Brand New Course"})
+
+    def items(*pairs):
+        return [Item("brightspace", f"bs:a:{c}:{i}", c, "announcement", f"A{i}", {"ou": 1 if c == "OLD1" else 2,
+                                                                                "posted_at": "2026-10-27T00:00:00Z"})
+                for c, i in pairs]
+
+    async def sweep(its):
+        async def collect():
+            return its
+        return await run_source(s, "brightspace", collect)
+
+    await sweep(items(("OLD1", 1)))
+    n.messages.clear()
+    changes = await sweep(items(("OLD1", 1), *[("NEW1", i) for i in range(5)]))
+    assert changes == []
+    assert [m for m in [m[0] for m in n.messages] if "New course added" in m] == ["New course added: Brand New Course — 5 items indexed."]
+    assert len([m[0] for m in n.messages]) == 1
+
+
+async def test_new_course_with_a_failed_fetch_is_not_announced_or_baselined_until_complete(db, env_file):
+    from dataclasses import replace
+
+    from core.models import Course
+    s = services(db, env_file)
+    await sweep_brightspace(s)
+    s.notifier.messages.clear()
+    s.bs.course_list = [Course(1001, "INV2101", "Investments"), Course(1002, "NEW1002", "Newer")]
+    new_a = lambda i: replace(assignment(i, ou=1002), course_code="NEW1002")  # noqa: E731
+    s.bs.assign[1002] = [new_a(i) for i in (1, 2, 3)]
+    real = s.bs.content_items
+
+    async def content_down(ou, code):
+        if ou == 1002:
+            raise RuntimeError("503")
+        return await real(ou, code)
+
+    s.bs.content_items = content_down
+    await sweep_brightspace(s)
+    assert s.notifier.messages == [] and db.get_item("brightspace", "bs:assignment:1002:1") is None
+    s.bs.content_items = real
+    await sweep_brightspace(s)
+    assert [m for m, _ in s.notifier.messages] == ["New course added: NEW1002 — 3 items indexed."]
+    s.notifier.messages.clear()
+    s.bs.assign[1002].append(new_a(4))
+    await sweep_brightspace(s)
+    assert any("Tutorial 4" in m for m, _ in s.notifier.messages)  # afterwards its changes alert normally
+
+
+async def test_new_course_with_a_tool_switched_off_403_is_still_complete(db, env_file):
+    import httpx
+
+    from core.models import Course
+    s = services(db, env_file)
+    await sweep_brightspace(s)
+    s.notifier.messages.clear()
+    s.bs.course_list = [Course(1001, "INV2101", "Investments"), Course(1002, "NEW1002", "Newer")]
+    from dataclasses import replace
+    new_a = lambda i: replace(assignment(i, ou=1002), course_code="NEW1002")  # noqa: E731
+    s.bs.assign[1002] = [new_a(i) for i in (1, 2)]
+
+    async def grades_off(ou, code):
+        if ou == 1002:
+            req = httpx.Request("GET", "https://x/grades")
+            raise httpx.HTTPStatusError("403", request=req, response=httpx.Response(403, request=req))
+        return []
+
+    s.bs.grades = grades_off
+    await sweep_brightspace(s)
+    assert db.get_item("brightspace", "bs:assignment:1002:1") is not None  # baselined, not deferred forever
+    assert [m for m, _ in s.notifier.messages] == ["New course added: NEW1002 — 2 items indexed."]
+    s.bs.assign[1002].append(new_a(3))
+    await sweep_brightspace(s)
+    assert any("Tutorial 3" in m for m, _ in s.notifier.messages)
+

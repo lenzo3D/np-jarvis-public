@@ -5,6 +5,7 @@ One-time setup (the user does this; JARVIS never sees the Google password):
     2. OAuth consent screen (External, add yourself as a test user)
     3. Credentials → Create OAuth client ID → Desktop app → download JSON → save as state/google_client.json
     4. .venv/bin/python -m core.gcal login     (opens your browser to approve)
+       On Windows use .venv\\Scripts\\python.exe in place of .venv/bin/python.
 """
 from __future__ import annotations
 
@@ -86,6 +87,13 @@ class GCal:
     async def insert(self, body: dict) -> str:
         return (await self._request("POST", self._events(), json=body)).json()["id"]
 
+    async def get(self, event_id: str) -> dict:
+        """Read one event. EventGone if it was deleted (404/410) or is cancelled."""
+        data = (await self._request("GET", f"{self._events()}/{event_id}")).json()
+        if data.get("status") == "cancelled":
+            raise EventGone(event_id)
+        return data
+
     async def patch(self, event_id: str, body: dict) -> None:
         data = (await self._request("PATCH", f"{self._events()}/{event_id}", json=body)).json()
         if data.get("status") == "cancelled":
@@ -114,7 +122,7 @@ def _write_private(path: Path, text: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_name(path.name + ".tmp")
     fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    with os.fdopen(fd, "w") as fh:
+    with os.fdopen(fd, "w", encoding="utf-8") as fh:
         fh.write(text)
     os.replace(tmp, path)
 

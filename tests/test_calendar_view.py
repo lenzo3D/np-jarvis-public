@@ -120,7 +120,7 @@ async def test_month_view_asks_google_for_the_six_week_range_and_caches(settings
 async def test_not_connected_states(settings):
     out = await CalendarView(settings).month(2026, 10)
     assert out == {"ok": False, "state": "setup", "message": "Google Calendar is not connected yet."}
-    (settings.state_dir / "google_client.json").write_text("{}")
+    (settings.state_dir / "google_client.json").write_text("{}", encoding="utf-8")
     assert (await CalendarView(settings).month(2026, 10))["state"] == "login"
 
 

@@ -29,8 +29,31 @@ def event_id_for(key: str) -> str:
     return "jv" + hashlib.sha1(key.encode()).hexdigest()
 
 
+def _ours(event: dict) -> bool:
+    return bool(((event.get("extendedProperties") or {}).get("private") or {}).get("jarvis_key"))
+
+
+async def _still_ours(store: DeadlineStore, gcal, d, eid: str, rep: SyncReport) -> bool:
+    """Re-read the event just before changing it. Gone (deleted in Google) -> remember it, never re-add. Present but
+    without our jarvis_key (someone else's event, or the marker was removed) -> leave it alone for good."""
+    try:
+        event = await gcal.get(eid)
+    except EventGone:
+        store.mark_user_deleted(d.key)
+        rep.user_deleted += 1
+        return False
+    if not _ours(event):
+        log.warning("calendar event %s for %s has no jarvis_key: not touching it", eid, d.key)
+        store.mark_user_deleted(d.key)
+        rep.user_deleted += 1
+        return False
+    return True
+
+
 async def _sync_one(store: DeadlineStore, gcal, d, course_names, tz, rep: SyncReport) -> None:
     if d.status == "gone":
+        if not await _still_ours(store, gcal, d, d.gcal_event_id, rep):
+            return
         try:
             await gcal.delete(d.gcal_event_id)
             store.set_event(d.key, None, None)
@@ -47,10 +70,14 @@ async def _sync_one(store: DeadlineStore, gcal, d, course_names, tz, rep: SyncRe
                 await gcal.insert({**body, "id": eid})
                 rep.inserted += 1
             except EventExists:
+                if not await _still_ours(store, gcal, d, eid, rep):
+                    return
                 await gcal.patch(eid, body)
                 rep.patched += 1
             store.set_event(d.key, eid, h)
         elif h != d.gcal_hash:
+            if not await _still_ours(store, gcal, d, eid, rep):
+                return
             await gcal.patch(eid, body)
             store.set_event(d.key, eid, h)
             rep.patched += 1

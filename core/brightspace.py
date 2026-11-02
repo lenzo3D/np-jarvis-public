@@ -12,7 +12,7 @@ import httpx
 
 from core.auth import AuthRequired, is_login_page
 from core.models import Assignment, Course, Item
-from core.text import html_to_text
+from core.text import disposition_filename, rich_to_text, safe_file_name
 
 
 class FileTooLarge(Exception):
@@ -189,7 +189,7 @@ class Brightspace:
         out = {}
         for f in folders:
             ins = f.get("CustomInstructions") or {}
-            out[f["Id"]] = (f.get("Name", ""), html_to_text(ins.get("Html") or ins.get("Text") or "", limit=20000))
+            out[f["Id"]] = (f.get("Name", ""), rich_to_text(ins, limit=20000))
         return out
 
     async def assignment_items(self, ou: int, course_code: str) -> list[Item]:
@@ -217,7 +217,7 @@ class Brightspace:
             out.append(Item("brightspace", f"bs:announcement:{ou}:{n['Id']}", course_code, "announcement",
                             n.get("Title", ""), {
                                 "ou": ou, "posted_at": _iso(n.get("StartDate")),
-                                "body_text": html_to_text(body.get("Html") or body.get("Text") or "", limit=2000),
+                                "body_text": rich_to_text(body, limit=2000),
                             }))
         return out
 
@@ -228,10 +228,9 @@ class Brightspace:
             comments = g.get("Comments") or {}
             out.append(Item("brightspace", f"bs:grade:{ou}:{g['GradeObjectIdentifier']}", course_code, "grade",
                             g.get("GradeObjectName", ""), {
-                                "value": g.get("PointsNumerator"), "out_of": g.get("PointsDenominator"),
+                                "ou": ou, "value": g.get("PointsNumerator"), "out_of": g.get("PointsDenominator"),
                                 "displayed": g.get("DisplayedGrade"),
-                                "feedback_text": html_to_text(comments.get("Html") or comments.get("Text") or "",
-                                                              limit=1000),
+                                "feedback_text": rich_to_text(comments, limit=1000),
                             }))
         return out
 
@@ -279,7 +278,7 @@ class Brightspace:
         meta = json.dumps({"Text": comment, "Html": None}).encode()
         body = b"".join([
             f"--{boundary}\r\nContent-Type: application/json\r\n\r\n".encode(), meta, b"\r\n",
-            f'--{boundary}\r\nContent-Disposition: form-data; name=""; filename="{file.name}"\r\n'
+            f'--{boundary}\r\nContent-Disposition: form-data; name=""; {disposition_filename(file.name)}\r\n'
             f"Content-Type: application/octet-stream\r\n\r\n".encode(), file.read_bytes(), b"\r\n",
             f"--{boundary}--\r\n".encode(),
         ])
@@ -291,7 +290,7 @@ class Brightspace:
                 headers={"Content-Type": f"multipart/mixed; boundary={boundary}", "X-Csrf-Token": token},
             )
             self._check(r)
-        return {"status": r.status_code, "file": file.name, "submitted_at": datetime.now(timezone.utc).isoformat()}
+        return {"status": r.status_code, "file": safe_file_name(file.name), "submitted_at": datetime.now(timezone.utc).isoformat()}
 
     async def post_discussion(self, ou: int, forum_id: int, topic_id: int, subject: str, text: str) -> dict:
         async with await self._client() as c:

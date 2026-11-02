@@ -5,8 +5,10 @@ import asyncio
 import logging
 from datetime import datetime
 
-from core.deadlines import DeadlineStore, local_date
+from core import hostos, project_tasks, usagecap
+from core.deadlines import DeadlineStore, display_moment, local_date
 from core.gcal import CalendarAuthRequired, GCal
+from ops import project_tasks as project_tasks_ops
 from ops.calsync import sync
 from ops.deadline_sources import _course_names, extract_chats, refresh_confirmed
 from ops.gcal_events import short_course
@@ -33,6 +35,10 @@ async def calendar_sync(ctx):
 
 
 async def _calendar_sync(ctx):
+    try:  # your own project-group tasks and the groups' meetings become tentative deadlines first (local, no network)
+        project_tasks.sync_deadlines(ctx.settings, ctx.db, ctx.clock())
+    except Exception:  # noqa: BLE001 - never let this stop the calendar
+        log.warning("project task calendar mirror failed", exc_info=True)
     gcal = get_gcal(ctx)
     if gcal is None:
         return None
@@ -41,7 +47,7 @@ async def _calendar_sync(ctx):
     except CalendarAuthRequired as e:
         if ctx.db.get_setting("gcal_warned") != "1":
             await ctx.notifier.send(f"Google Calendar needs reconnecting: {e}\n"
-                                    "Run: .venv/bin/python -m core.gcal login")
+                                    f"Run: {hostos.python_hint('-m core.gcal login')}")
             ctx.db.set_setting("gcal_warned", "1")
         ctx.extra.pop("gcal", None)
         return None
@@ -65,6 +71,10 @@ async def extract_job(ctx) -> dict | None:
     async with _scan_lock:
         stats = await full_scan(ctx, extract=True)
         stats["deadlines"] += await extract_chats(ctx)
+        try:
+            await project_tasks_ops.extract_all(ctx)
+        except Exception:  # noqa: BLE001 - the project task list must never stop the date scan
+            log.warning("project task extraction failed", exc_info=True)
         await refresh_confirmed(ctx)
     await calendar_sync(ctx)
     return stats
@@ -77,11 +87,13 @@ async def scan_command(ctx) -> str:
     total = len(DeadlineStore(ctx.db).active())
     cal = "synced to Google Calendar" if get_gcal(ctx) else "Google Calendar not connected yet"
     errors = f", {stats['errors']} errors" if stats["errors"] else ""
+    held = ("\nDate extraction is paused to save usage; it picks up where it left off when the period resets "
+            "(or when you /usage resume).") if usagecap.paused(ctx) else ""
     return (f"Scan done: {stats['courses']} courses, {stats['documents']} documents, "
             f"{stats['announcements']} announcements, {stats['assignments']} assignment briefs read"
             f"{errors}.\n"
             f"{stats['deadlines']} new tentative date(s) found; {total} deadlines tracked ({cal}).\n"
-            "Ask me anything, e.g. \"when are all my assignments due?\"")
+            "Ask me anything, e.g. \"when are all my assignments due?\"" + held)
 
 
 async def deadlines_text(ctx, days: int = 14) -> str:
@@ -93,9 +105,15 @@ async def deadlines_text(ctx, days: int = 14) -> str:
     lines = [f"Next {days} days (tentative dates are marked)"]
     for d in items:
         tag = "" if d.confidence == "confirmed" else " [tentative]"
+        row = ctx.db.conn.execute("select submitted, user_confirmed from due_dates where item_key=?", (d.key,)).fetchone()
+        if row and row["submitted"]:
+            tag += " [submitted]"
+        elif row and row["user_confirmed"]:
+            tag += " [you say submitted; POLITEMall has not confirmed it]"
         if d.all_day:
             when = local_date(d, tz).strftime("%a %d %b")
         else:
-            when = datetime.fromisoformat(d.end_utc or d.start_utc).astimezone(tz).strftime("%a %d %b %H:%M")
-        lines.append(f"{when} · {short_course(names.get(d.course_code or '', ''), d.course_code)}: {d.title}{tag}")
+            when = datetime.fromisoformat(display_moment(d)).astimezone(tz).strftime("%a %d %b %H:%M")
+        who = "" if d.source == "project" else f"{short_course(names.get(d.course_code or '', ''), d.course_code)}: "
+        lines.append(f"{when} · {who}{d.title}{tag}")
     return "\n".join(lines)

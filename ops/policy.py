@@ -24,12 +24,17 @@ def in_quiet_hours(now_local: time, spec: str | None) -> bool:
     return h >= start or h < end
 
 
+def is_muted(db: DB, course_code: str | None) -> bool:
+    """/mute stores upper-case codes; match whatever case the course code has."""
+    return bool(course_code) and course_code.upper() in {m.upper() for m in db.get_json_setting("muted", [])}
+
+
 def decide(level: str, course_code: str | None, db: DB, now_utc: datetime, tz=SGT) -> Decision:
     if db.get_setting("paused") == "1":
         return "drop"
     if level == "red":
         return "send"
-    if course_code and course_code in db.get_json_setting("muted", []):
+    if is_muted(db, course_code):
         return "drop"
     if level == "yellow":
         return "batch"

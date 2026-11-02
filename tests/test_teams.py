@@ -66,7 +66,7 @@ def test_ui_ids_stable_across_processes():
     import sys
     code = "from core.teams import ui_key; print(ui_key('Group chat', 'see you at 3'))"
     outs = {subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, cwd=".",
-                           env={"PYTHONHASHSEED": seed, "PATH": ""}).stdout for seed in ("1", "2")}
+                           env={"PYTHONHASHSEED": seed, "PATH": ""}, encoding="utf-8").stdout for seed in ("1", "2")}
     assert len(outs) == 1 and outs.pop().strip()
 
 

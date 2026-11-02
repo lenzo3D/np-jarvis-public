@@ -5,6 +5,7 @@ import asyncio
 import sys
 import time
 
+from core import hostos
 from ui.supervisor import REPO
 
 PY = sys.executable
@@ -57,20 +58,21 @@ class Jobs:
 
     async def cancel(self) -> None:
         if self.running and self.current and self.current.get("proc"):
-            self.current["proc"].terminate()
+            hostos.kill_process_tree(self.current["proc"])
 
     async def _run(self, cmd: list[str], on_finish=None) -> None:
         job = self.current
         try:
             proc = await asyncio.create_subprocess_exec(*cmd, cwd=str(REPO), stdin=asyncio.subprocess.DEVNULL,
-                                                        stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT)
+                                                        stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT,
+                                                        env=hostos.child_env())
             job["proc"] = proc
             deadline = time.monotonic() + (job.get("timeout") or TIMEOUT)
             while True:
                 line = await asyncio.wait_for(proc.stdout.readline(), max(1, deadline - time.monotonic()))
                 if not line:
                     break
-                job["output"] = (job["output"] + line.decode(errors="replace"))[-MAX_OUTPUT:]
+                job["output"] = (job["output"] + line.decode("utf-8", errors="replace"))[-MAX_OUTPUT:]
             await proc.wait()
             job["state"] = "done" if proc.returncode == 0 else "failed"
             if job["state"] == "done" and job.get("clears") and self.on_result:

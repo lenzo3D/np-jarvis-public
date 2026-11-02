@@ -7,7 +7,7 @@ import logging
 import re
 from datetime import datetime, timedelta
 
-from core import groups, tg_group
+from core import groups, tg_group, usagecap
 from core.models import Item
 from ops import claude_runner, persona
 from ops.diff import Change
@@ -45,6 +45,8 @@ async def group_summary(ctx, since: datetime, chat_id: int | None = None, label:
                         kind: str = "class") -> None:
     tz = ctx.settings.tz
     label = label or groups.DEFAULT_LABEL
+    if usagecap.paused(ctx):
+        return  # usage cap reached: nothing is marked as summarised, so the next run after the reset covers it
     msgs = tg_group.messages_since(ctx.db, chat_id, since)
     if not msgs:
         return
@@ -54,7 +56,7 @@ async def group_summary(ctx, since: datetime, chat_id: int | None = None, label:
     try:
         with claude_runner.labelled("group_summary"):
             raw = await _run_text(ctx)(claude_runner.load_prompt("group_summary", group=label, kind=kind, **persona.fields(ctx.settings)), input_text,
-                                       run_as=ctx.settings.claude_run_as)
+                                       model=usagecap.model_for(ctx.db, "group_summary"), run_as=ctx.settings.claude_run_as)
     except claude_runner.ClaudeError as e:
         log.warning("group summary failed: %s", e)
         return
@@ -145,12 +147,16 @@ async def build_briefing_input(ctx, now: datetime) -> str:
 async def daily_briefing(ctx) -> None:
     now = ctx.clock()
     facts = await build_briefing_input(ctx, now)
-    try:
-        with claude_runner.labelled("briefing"):
-            text = await _run_text(ctx)(claude_runner.load_prompt("briefing", **persona.fields(ctx.settings)), facts, run_as=ctx.settings.claude_run_as)
-    except claude_runner.ClaudeError as e:
-        log.warning("briefing formatting failed: %s", e)
-        text = "Daily briefing\n\n" + facts
+    if usagecap.paused(ctx):  # the briefing is essential, so it still goes out, as the plain list without a Claude call
+        text = persona.plain_briefing(ctx.settings, facts)
+    else:
+        try:
+            with claude_runner.labelled("briefing"):
+                text = await _run_text(ctx)(claude_runner.load_prompt("briefing", **persona.fields(ctx.settings)), facts,
+                                            model=usagecap.model_for(ctx.db, "briefing"), run_as=ctx.settings.claude_run_as)
+        except claude_runner.ClaudeError as e:
+            log.warning("briefing formatting failed: %s", e)
+            text = "Daily briefing\n\n" + facts
     await ctx.notifier.send(text)
     ctx.db.set_json_setting("briefing_queue", [])
     ctx.db.set_setting("last_briefing_date", now.astimezone(ctx.settings.tz).date().isoformat())

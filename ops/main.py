@@ -1,6 +1,6 @@
 """Entry point for the ops service: Ops bot + scheduler (+ local API when present).
 
-    .venv/bin/python -m ops.main
+    .venv/bin/python -m ops.main      (Windows: .venv\\Scripts\\python.exe -m ops.main)
 """
 from __future__ import annotations
 
@@ -11,13 +11,15 @@ from datetime import datetime
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
+from core import hostos
 from core.auth import AuthRequired, SessionManager
 from core.brightspace import Brightspace
 from core.outlook import Outlook
 from core.teams import Teams
 from core.config import load_settings
 from core.db import DB
-from ops import claude_runner, deadline_jobs, persona, scheduler, watcher
+from core import usagecap
+from ops import claude_runner, deadline_jobs, persona, project_tasks, reminders, scheduler, usage_watch, watcher
 from ops.chat_agent import ChatAgent
 from ops.approvals import Approvals
 from ops.doit import DoIt
@@ -64,6 +66,7 @@ def _wire(s: watcher.Services) -> None:
         lines.append(f"• pending approvals: {pending}")
         lines.append(f"• paused: {'yes' if db.get_setting('paused') == '1' else 'no'}; "
                      f"quiet: {db.get_setting('quiet') or 'off'}; muted: {', '.join(db.get_json_setting('muted', [])) or 'none'}")
+        lines.append("• " + usagecap.describe(usagecap.snapshot(db, s.settings.tz, s.clock())))
         return "\n".join(lines)
 
     async def sweep() -> str:
@@ -87,7 +90,18 @@ def _wire(s: watcher.Services) -> None:
         asyncio.get_running_loop().create_task(run())
         return f"Starting {watcher.SOURCE_NAMES.get(site, site)} login… watch for the Authenticator number."
 
-    hooks.update(status=status, sweep=sweep, login=login)
+    async def usage(*args: str) -> str:
+        return await usage_watch.command(s, *args)
+
+    async def usage_button(arg: str) -> str:
+        return await usage_watch.on_resume_button(s, arg)
+
+    async def tasks(ref: str = "") -> str:
+        return await project_tasks.tasks_command(s, ref)
+
+    hooks.update(status=status, sweep=sweep, login=login, usage=usage, tasks=tasks)
+    router.register("usage", usage_button)
+    claude_runner.set_after_record(lambda: usage_watch.schedule_check(s))  # warn the moment a call crosses 80% / 100%
     router.register("login:retry", login)
 
     async def mute(course: str) -> str:
@@ -132,10 +146,21 @@ def _wire(s: watcher.Services) -> None:
     router.register("doit", doit.on_doit)
     router.register("dl", doit.on_dl)
 
+    async def rem_snooze(key: str) -> str:
+        return reminders.snooze(s, key)
+
+    async def rem_done(key: str) -> str:
+        return reminders.submitted_elsewhere(s, key)
+
+    router.register("rem:snooze", rem_snooze)
+    router.register("rem:done", rem_done)
+
 
 async def amain() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
     s = build_services()
+    if hostos.is_windows():  # mode 0o700 does nothing there; limit state/ to this user
+        hostos.restrict_to_user(s.settings.state_dir)
     app = s.extra["app"]
     sched = AsyncIOScheduler(timezone="Asia/Singapore")
     scheduler.register(sched, s)
@@ -181,6 +206,9 @@ async def amain() -> None:
             if task:
                 task.cancel()
             sched.shutdown(wait=False)
+            from ops import api as _api
+
+            _api.stop_cleanup(s)
             await app.updater.stop()
             await app.stop()
             await s.sessions.close()

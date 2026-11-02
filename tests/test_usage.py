@@ -22,9 +22,12 @@ def recorded():
     claude_runner.set_usage_sink(None)
 
 
+pytestmark = pytest.mark.skipif(sys.platform == "win32", reason="the fake claude is a shebang script")
+
+
 def fake_claude(tmp_path, monkeypatch, body: str):
     exe = tmp_path / "claude"
-    exe.write_text(f"#!{sys.executable}\n{body}\n")
+    exe.write_text(f"#!{sys.executable}\n{body}\n", encoding="utf-8")
     exe.chmod(exe.stat().st_mode | stat.S_IEXEC)
     monkeypatch.setenv("CLAUDE_BIN", str(exe))
 

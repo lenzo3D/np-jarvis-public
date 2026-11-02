@@ -60,3 +60,34 @@ def test_hash_stable_and_sensitive():
     a = event_body(dl(), "Investments", SGT)
     assert event_hash(a) == event_hash(event_body(dl(), "Investments", SGT))
     assert event_hash(a) != event_hash(event_body(dl(title="Tutorial 6"), "Investments", SGT))
+
+
+def test_timed_other_event_is_an_event_with_a_default_hour_and_reminders():
+    from core.deadlines import is_due
+    from ops.gcal_events import event_body
+    from zoneinfo import ZoneInfo
+    tz = ZoneInfo("Asia/Singapore")
+    d = Deadline(key="k1", title="Industry briefing", course_code=None, kind="other", start_utc="2026-11-10T06:00:00+00:00",
+                 end_utc=None, all_day=False, source="brightspace", source_ref="", confidence="confirmed", quote="",
+                 as_event=True)
+    b = event_body(d, "", tz)
+    assert b["start"]["dateTime"].startswith("2026-11-10T14:00") and b["end"]["dateTime"].startswith("2026-11-10T15:00")
+    assert [o["minutes"] for o in b["reminders"]["overrides"]] == [1440, 60]
+    assert b["description"].startswith("Event")
+    due = Deadline(**{**d.__dict__, "key": "k2", "title": "Reflection due", "as_event": False})
+    bd = event_body(due, "", tz)
+    assert bd["end"]["dateTime"].startswith("2026-11-10T14:00") and bd["start"]["dateTime"].startswith("2026-11-10T13:30")
+    assert [o["minutes"] for o in bd["reminders"]["overrides"]] == [1440, 180]
+    assert is_due("other") and not is_due("other", True)
+
+
+def test_tentative_events_never_carry_web_addresses():
+    from ops.gcal_events import event_body
+    from zoneinfo import ZoneInfo
+    tz = ZoneInfo("Asia/Singapore")
+    kw = dict(course_code=None, kind="quiz", start_utc="2026-11-10T06:00:00+00:00", end_utc=None, all_day=False,
+              source="teams", source_ref="", quote="see https://evil.example/x?a=1 or www.evil.example now")
+    t = event_body(Deadline(key="a", title="Quiz at http://evil.example/q", confidence="tentative", **kw), "", tz)
+    assert "evil" not in t["summary"] and "evil" not in t["description"]
+    c = event_body(Deadline(key="b", title="Quiz at http://ok.example/q", confidence="confirmed", **kw), "", tz)
+    assert "ok.example" in c["summary"]

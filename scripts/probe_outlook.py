@@ -1,6 +1,7 @@
 """What can the Outlook login read? Prints statuses only (never message content) and remembers the method that works.
 
     .venv/bin/python scripts/probe_outlook.py [--show]
+    (Windows: use .venv\\Scripts\\python.exe instead of .venv/bin/python)
 
 Run it from the panel (Logins & Tools > Check Outlook email access) after logging in to Outlook.
 If nothing works, copy the output and send it on: it is exactly what is needed to add the right method.
@@ -67,7 +68,7 @@ async def main() -> int:
         print(f"  cookie names: {st.get('cookies')}")
 
     (settings.state_dir).mkdir(parents=True, exist_ok=True)
-    (settings.state_dir / "outlook-probe.json").write_text(json.dumps(report, indent=2))
+    (settings.state_dir / "outlook-probe.json").write_text(json.dumps(report, indent=2), encoding="utf-8")
     db = DB(settings.db_path)
     db.init()
     now = datetime.now(timezone.utc)

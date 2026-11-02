@@ -19,7 +19,7 @@ CLASS, PROJECT = -1001, -1002
 
 
 def settings_with(env_file, extra=""):
-    env_file.write_text(env_file.read_text() + extra)
+    env_file.write_text(env_file.read_text(encoding="utf-8") + extra, encoding="utf-8")
     return load_settings(env_file)
 
 
@@ -224,10 +224,10 @@ def test_session_ready_needs_a_session_file_and_no_fresh_login_lock(env_file):
     s = load_settings(env_file)
     s.state_dir.mkdir(parents=True, exist_ok=True)
     assert telethon_main.session_ready(s) is False
-    telethon_main.session_path(s).write_text("x")
+    telethon_main.session_path(s).write_text("x", encoding="utf-8")
     assert telethon_main.session_ready(s) is True
     lock = telethon_main.login_lock_path(s)
-    lock.write_text("x")
+    lock.write_text("x", encoding="utf-8")
     assert telethon_main.session_ready(s) is False  # a login is in progress
     old = __import__("time").time() - 3600
     os.utime(lock, (old, old))

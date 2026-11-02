@@ -65,7 +65,7 @@ class FakeTg:
 
 @pytest.fixture
 def settings(env_file):
-    env_file.write_text(env_file.read_text() + "TELETHON_API_ID=1\nTELETHON_API_HASH=h\n")
+    env_file.write_text(env_file.read_text(encoding="utf-8") + "TELETHON_API_ID=1\nTELETHON_API_HASH=h\n", encoding="utf-8")
     s = load_settings(env_file)
     s.state_dir.mkdir(parents=True, exist_ok=True)
     return s
@@ -129,7 +129,7 @@ def test_setup_stage_progression(settings, env_file):
     st = chats.telegram_state(bare, db, True)
     assert (st["stage"], st["telethon"], st["health"]) == ("setup", "no_api_keys", "setup")
     assert chats.telegram_state(settings, db, True)["telethon"] == "login"
-    telethon_main.session_path(settings).write_text("x")
+    telethon_main.session_path(settings).write_text("x", encoding="utf-8")
     assert chats.telegram_state(settings, db, True)["telethon"] == "ready" and chats.telegram_state(settings, db, True)["stage"] == "setup"
     groups.add_bot_group(db, PROJECT, "FYP Team")  # the owner added the bot to a group: it appears to be ticked
     assert chats.telegram_state(settings, db, True)["stage"] == "pick"
@@ -141,7 +141,7 @@ def test_setup_stage_progression(settings, env_file):
 
 def test_own_account_reader_health_when_the_bot_is_not_in_the_group(settings):
     db = db_with_groups(settings)
-    telethon_main.session_path(settings).write_text("x")
+    telethon_main.session_path(settings).write_text("x", encoding="utf-8")
     groups.save_dialogs(db, [{"id": PROJECT, "name": "FYP Team"}])
     groups.save(db, [{"id": PROJECT, "label": "Project", "kind": "project"}])
     assert chats.telegram_state(settings, db, True)["health"] == "stale"  # nothing has reported yet
@@ -206,7 +206,7 @@ async def test_endpoints_save_only_your_own_dialogs_and_serve_messages(settings)
 
 def test_listener_message_is_reported_so_the_panel_can_say_why(settings):
     db = db_with_groups(settings)
-    telethon_main.session_path(settings).write_text("x")
+    telethon_main.session_path(settings).write_text("x", encoding="utf-8")
     db.set_json_setting("telethon_status", {"state": "error", "message": "FloodWaitError", "at": datetime.now(timezone.utc).isoformat()})
     st = chats.telegram_state(settings, db, True)
     assert st["listener"] == "error" and st["listener_message"] == "FloodWaitError"

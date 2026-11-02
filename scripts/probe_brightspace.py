@@ -2,6 +2,7 @@
 
 Run (you approve MFA on your phone):
     .venv/bin/python scripts/probe_brightspace.py [--show]
+    (Windows: use .venv\\Scripts\\python.exe instead of .venv/bin/python)
 
 Prints PASS/FAIL per route, writes state/probe-results.md, and saves redacted JSON
 samples to state/probe-samples/ (git-ignored: real account data). Read-only: never writes to POLITEMall.
@@ -66,7 +67,7 @@ async def main() -> None:
                     results.append(("PASS" if ok else "FAIL", name, r.status_code))
                     if WRITE and ok and save and "json" in r.headers.get("content-type", ""):
                         FIX.mkdir(parents=True, exist_ok=True)
-                        (FIX / f"{name}.json").write_text(json.dumps(redact(r.json()), indent=2))
+                        (FIX / f"{name}.json").write_text(json.dumps(redact(r.json()), indent=2), encoding="utf-8")
                     return r.json() if ok and "json" in r.headers.get("content-type", "") else None
                 except Exception as e:  # noqa: BLE001
                     results.append(("FAIL", name, repr(e)))
@@ -111,7 +112,7 @@ async def main() -> None:
         lines.append(f"| {res} | {name} | {status} |")
     if WRITE:
         (ROOT / "state").mkdir(exist_ok=True)
-        (ROOT / "state" / "probe-results.md").write_text("\n".join(lines) + "\n")
+        (ROOT / "state" / "probe-results.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
         print("\nWrote state/probe-results.md and state/probe-samples/*.json (git-ignored; do not share them).")
     else:
         print("\nChecked only: nothing was written to the repository.")

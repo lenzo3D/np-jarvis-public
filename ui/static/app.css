@@ -56,6 +56,7 @@ button, input, select { font: inherit; color: inherit; letter-spacing: inherit; 
 .ico { width: 18px; height: 18px; flex: none; background: currentColor; -webkit-mask: var(--i) center / contain no-repeat; mask: var(--i) center / contain no-repeat; }
 .ico-grid { --i: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2'%3E%3Crect x='3' y='3' width='7' height='7' rx='1'/%3E%3Crect x='14' y='3' width='7' height='7' rx='1'/%3E%3Crect x='3' y='14' width='7' height='7' rx='1'/%3E%3Crect x='14' y='14' width='7' height='7' rx='1'/%3E%3C/svg%3E"); }
 .ico-list { --i: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round'%3E%3Cpath d='M9 6h11M9 12h11M9 18h11M4 6h.01M4 12h.01M4 18h.01'/%3E%3C/svg%3E"); }
+.ico-check { --i: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect x='3' y='3' width='18' height='18' rx='3'/%3E%3Cpath d='M8 12.5l3 3 5-6'/%3E%3C/svg%3E"); }
 .ico-people { --i: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round'%3E%3Ccircle cx='9' cy='8' r='3.5'/%3E%3Cpath d='M2.5 20c.5-3.6 3-5.5 6.5-5.5s6 1.9 6.5 5.5M16 4.8a3.5 3.5 0 010 6.4M18 14.8c2 .6 3.3 2.3 3.5 5.2'/%3E%3C/svg%3E"); }
 .ico-mail { --i: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linejoin='round'%3E%3Crect x='3' y='5' width='18' height='14' rx='2'/%3E%3Cpath d='M3.5 6.5l8.5 6.5 8.5-6.5'/%3E%3C/svg%3E"); }
 .ico-chat { --i: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linejoin='round'%3E%3Cpath d='M4 5h16v11H9l-5 4z'/%3E%3C/svg%3E"); }
@@ -358,3 +359,25 @@ input[type=checkbox] { accent-color: var(--cyan); }
 .more-tools { margin: 10px 0 14px; }
 .more-tools summary { cursor: pointer; color: var(--muted); padding: 6px 0; }
 .more-tools .btn-row { margin-top: 8px; }
+
+.cap-form { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; margin: 12px 0; }
+.cap-form label { display: block; color: var(--muted); font-size: 14px; }
+.cap-form input[type=number], .cap-form select { display: block; width: 100%; margin-top: 4px; }
+.cap-form .cap-check { grid-column: 1 / -1; }
+.cap-form .cap-check input { margin-right: 8px; }
+
+/* ---------- project tasks ---------- */
+.tk-group { margin: 0 0 18px; } .tk-group h3 { margin: 0 0 8px; }
+.tk-person { margin: 10px 0 4px; font: 700 12px var(--head); letter-spacing: .14em; text-transform: uppercase; color: var(--cyan-2); }
+.tk-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px 12px; padding: 8px 10px; margin: 4px 0; border: 1px solid var(--line); border-radius: 8px; background: var(--panel-2); }
+.tk-row.closed { opacity: .6; } .tk-row.closed .tk-text { text-decoration: line-through; }
+.tk-text { overflow-wrap: anywhere; } .tk-meta { color: var(--muted); font-size: 13px; }
+.tk-tag { margin-left: 8px; padding: 1px 8px; border: 1px solid var(--line-strong); border-radius: 999px; font-size: 11px; color: var(--cyan-2); }
+.tk-tag.warn { color: var(--warn); border-color: rgba(255,176,32,.5); }
+.tk-actions { display: flex; flex-wrap: wrap; gap: 6px; align-items: flex-start; justify-content: flex-end; }
+.tk-actions .btn { padding: 3px 10px; font-size: 13px; }
+.tk-edit { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.tk-edit input[type=text], .tk-edit input[type=date], .tk-edit input[type=time], .alias-row input { padding: 6px 10px; border: 1px solid var(--line-strong); border-radius: 8px; background: #05202f; color: var(--text); min-width: 0; }
+.tk-quote { grid-column: 1 / -1; margin: 0; } .tk-quote summary { cursor: pointer; color: var(--muted); font-size: 13px; }
+.tk-quote blockquote { margin: 6px 0 0; padding-left: 10px; border-left: 2px solid var(--line-strong); color: var(--muted); white-space: pre-wrap; overflow-wrap: anywhere; }
+.alias-row { display: flex; gap: 8px; margin: 6px 0; align-items: center; flex-wrap: wrap; }

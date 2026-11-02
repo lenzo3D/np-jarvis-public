@@ -1,0 +1,5 @@
+# Keep line endings right for the scripts each OS runs (a bash script with CRLF, or a .bat with LF, can fail).
+*.sh text eol=lf
+*.command text eol=lf
+*.bat text eol=crlf
+*.ps1 text eol=crlf

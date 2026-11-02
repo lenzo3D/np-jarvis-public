@@ -5,6 +5,7 @@ Normally it runs inside Ops (see ops/main.py) and the panel handles the one-time
 
     .venv/bin/python -m ops.telethon_main login   # one-time, asks for phone + code
     .venv/bin/python -m ops.telethon_main         # run listener
+    (Windows: use .venv\\Scripts\\python.exe instead of .venv/bin/python)
 """
 from __future__ import annotations
 
@@ -39,7 +40,8 @@ def to_group_message(chat_id: int, msg) -> GroupMessage | None:
     text = getattr(msg, "message", None) or ""
     if not text.strip():
         return None
-    return GroupMessage(chat_id, msg.id, _sender_name(msg), text, msg.date)
+    sid = getattr(msg, "sender_id", None)
+    return GroupMessage(chat_id, msg.id, _sender_name(msg), text, msg.date, sid if isinstance(sid, int) else None)
 
 
 def client_for(settings) -> TelegramClient:
@@ -90,6 +92,12 @@ async def _refresh_dialogs(client, db) -> None:
 async def _watch(client, settings, db, poll: float, on_message=None) -> None:
     """One authorised connection: mirror the chosen groups into the database until the connection drops."""
     backfilled: set[int] = set()
+    try:  # who "me" is, so project tasks can tell your own messages apart by id, not by display name
+        me = await client.get_me()
+        if getattr(me, "id", None):
+            db.set_setting("telegram_me_id", str(int(me.id)))
+    except Exception:  # noqa: BLE001 - the allowed Telegram id is the fallback
+        log.debug("get_me failed", exc_info=True)
 
     async def on_new(event):
         if event.chat_id not in groups.ids(settings, db):

@@ -195,7 +195,7 @@ class FakeSessions:
     def _cookie_file(self, site):
         p = self.root / f"{site}.cookies.json"
         if self.saved:
-            p.write_text("[]")
+            p.write_text("[]", encoding="utf-8")
         return p
 
 
@@ -266,11 +266,15 @@ async def test_nothing_runs_until_the_user_has_logged_in(db, env_file, tmp_path)
     assert await mail_jobs.sweep_outlook(s) == [] and reader.calls == [] and s.notifier.messages == []
 
 
-async def test_unreadable_mailbox_is_reported_and_counted_as_a_failure(db, env_file, tmp_path):
-    s = svc(db, env_file, tmp_path, FakeReader([MailUnavailable("Could not read the mailbox (graph: HTTP 403).")]))
+async def test_unreadable_mailbox_turns_red_only_on_the_third_failure_in_a_row(db, env_file, tmp_path):
+    err = MailUnavailable("Could not read the mailbox (graph: HTTP 403).")
+    s = svc(db, env_file, tmp_path, FakeReader([err]))
+    failures = lambda: db.conn.execute("select consecutive_failures from source_health where source='outlook'").fetchone()[0]  # noqa: E731
     await mail_jobs.sweep_outlook(s)
-    assert db.get_json_setting("outlook_status", {})["state"] == "no_access"
-    assert db.conn.execute("select consecutive_failures from source_health where source='outlook'").fetchone()[0] == 1
+    await mail_jobs.sweep_outlook(s)
+    assert failures() == 2 and db.get_json_setting("outlook_status", {}).get("state") != "no_access"
+    await mail_jobs.sweep_outlook(s)
+    assert failures() == 3 and db.get_json_setting("outlook_status", {})["state"] == "no_access"
 
 
 async def test_expired_outlook_session_prompts_a_login_once(db, env_file, tmp_path):

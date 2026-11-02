@@ -13,7 +13,7 @@ BASE = "https://politemall.example"
 
 
 def j(name):
-    return json.loads((FIX / f"{name}.json").read_text())
+    return json.loads((FIX / f"{name}.json").read_text(encoding="utf-8"))
 
 
 class FakeSession:
@@ -94,6 +94,7 @@ async def test_grades(mock, bs):
     assert g.stable_id == "bs:grade:1001:7"
     assert g.payload["value"] == 8.0 and g.payload["out_of"] == 10.0
     assert g.payload["feedback_text"] == "Well done"
+    assert g.payload["ou"] == 1001
 
 
 async def test_submitted(mock, bs):
@@ -175,3 +176,39 @@ async def test_fetch_file_aborts_past_size_cap(mock, bs):
     mock.get("/d2l/api/le/1.79/1001/content/topics/702/file").respond(200, content=b"x" * 2048)
     with pytest.raises(FileTooLarge):
         await bs.fetch_file(1001, 702, max_bytes=1024)
+
+
+def test_safe_file_name_and_disposition():
+    from core.text import disposition_filename, safe_file_name
+    assert safe_file_name('a"b\\c/d\r\ne.docx') == "d__e.docx"
+    assert safe_file_name('rep"ort\r\nX-Evil: 1.docx') == "rep_ort__X-Evil_ 1.docx"
+    assert safe_file_name("../../etc/passwd") == "passwd" and safe_file_name("") == "file" and safe_file_name("..") == "file"
+    assert safe_file_name("a‮exe.docx") == "a_exe.docx"
+    assert len(safe_file_name("x" * 500 + ".pdf")) <= 120 and safe_file_name("x" * 500 + ".pdf").endswith(".pdf")
+    assert disposition_filename("T5.docx") == 'filename="T5.docx"'
+    d = disposition_filename("报告 café.docx")
+    assert d.startswith('filename="__ caf_.docx"') and "filename*=UTF-8''%E6%8A%A5%E5%91%8A%20caf%C3%A9.docx" in d
+    assert "\r" not in d and "\n" not in d
+
+
+async def test_submit_escapes_the_file_name_in_the_multipart_header(mock, bs, tmp_path):
+    f = tmp_path / 'we"ird\nname é.docx'
+    try:
+        f.write_bytes(b"PK..")
+    except OSError:
+        pytest.skip("file system cannot hold this name")
+    mock.get("/d2l/lp/auth/xsrf-tokens").respond(json={"referrerToken": "X"})
+    route = mock.post("/d2l/api/le/1.79/1001/dropbox/folders/55/submissions/mysubmissions/").respond(200)
+    r = await bs.submit(1001, 55, f, "")
+    head = route.calls.last.request.content.split(b"PK..")[0]
+    assert b'filename="we_ird_name _.docx"; filename*=UTF-8\'\'we_ird_name%20%C3%A9.docx' in head
+    assert b'\nname' not in head and r["file"] == "we_ird_name é.docx"
+
+
+def test_card_shows_exactly_the_name_that_is_sent():
+    from core.text import ascii_file_name, disposition_filename, shown_file_name
+    assert shown_file_name("T5.docx") == "T5.docx"
+    assert shown_file_name("café.docx") == "caf_.docx [café.docx]"
+    n = 'we"ird\r\n报告.docx'
+    assert f'filename="{ascii_file_name(n)}"' in disposition_filename(n)
+    assert shown_file_name(n).startswith(ascii_file_name(n) + " [")

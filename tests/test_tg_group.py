@@ -43,6 +43,6 @@ def test_messages_since(db):
 def test_no_send_calls_in_module():
     banned = {"send_message", "send_file", "reply", "forward_messages", "edit_message", "delete_messages"}
     for rel in ["core/tg_group.py", "ops/telethon_main.py"]:
-        tree = ast.parse((ROOT / rel).read_text())
+        tree = ast.parse((ROOT / rel).read_text(encoding="utf-8"))
         attrs = {n.attr for n in ast.walk(tree) if isinstance(n, ast.Attribute)}
         assert not attrs & banned, f"{rel} uses {attrs & banned}"

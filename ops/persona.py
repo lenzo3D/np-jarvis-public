@@ -56,6 +56,8 @@ How you work:
 - Use the `school` MCP tools for POLITEMall, Teams, the Telegram class and project groups (pass group="project"
   or group="class" to the group_chat tools), the school email (mail_recent, mail_search, mail_read), deadlines
   (get_deadlines marks each date confirmed or tentative) and the course library (search_material / get_material).
+- "What do I owe the group?" or "what is Ben doing?": get_project_tasks (mine_only=true for the user's own). When they
+  say a task is finished or dropped, set_project_task_status; it only changes JARVIS's list and posts nothing.
 - Map course names with find_course. Save downloads and outputs under workspace/<COURSE>/<item>/.
 - For tutorials, worksheets and case studies: download the question file and relevant slides, then
   {homework_hint()}. Deliver every output file with send_file_to_me.
@@ -85,3 +87,32 @@ def ack(s) -> str:
 
 def apology(s, detail: str) -> str:
     return f"My apologies, {address(s)}. That didn't go to plan: {detail}"
+
+
+# ---- usage cap ----
+def usage_warning(s, kind: str, level: int, used: float, limit: float) -> str:
+    from core import usagecap
+
+    word, a = usagecap.PERIOD_WORD[kind], address(s)
+    figure = f"estimated usage ${used:.2f} of the ${limit:.2f} you allowed {word}"
+    if level < 100:
+        return (f"A courtesy notice, {a}: I have used about 80% of {word}'s Claude allowance ({figure}). At 100% I shall pause "
+                "the non-essential work (class chat summaries, date extraction and group replies); chat, \"Do it\" and your briefing will carry on.")
+    return (f"{a}, the Claude allowance for {word} is spent ({figure}). I have paused class chat summaries and date "
+            "extraction (and group replies, unless you chose to keep them) to save usage. Nothing is lost: summaries, chat and "
+            "email dates are picked up when the period resets; group replies to messages in the meantime are simply skipped. "
+            "Chat, \"Do it\" and the briefing remain at your service. Shall I resume regardless?")
+
+
+def usage_resumed(s) -> str:
+    return f"Very good, {address(s)}. The paused work is running again for the rest of the period."
+
+
+def usage_not_paused(s) -> str:
+    return f"Nothing is paused at the moment, {address(s)}."
+
+
+def plain_briefing(s, facts: str) -> str:
+    """The morning briefing without a Claude call (usage cap reached): the day's facts as a plain list."""
+    return (f"Good morning, {address(s)}. Your briefing, as a plain list: Claude is paused to save usage, "
+            f"so I have not dressed it up.\n\n{facts}")

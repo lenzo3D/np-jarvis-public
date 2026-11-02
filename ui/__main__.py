@@ -1,15 +1,16 @@
-"""Run the control panel:  .venv/bin/python -m ui   (then open http://127.0.0.1:8765)"""
+"""Run the control panel:  .venv/bin/python -m ui   (Windows: .venv\\Scripts\\python.exe -m ui)
+Then open http://127.0.0.1:8765"""
 from __future__ import annotations
 
 import asyncio
 import logging
 import os
-import signal
 import sys
 import webbrowser
 
 from aiohttp import web
 
+from core import hostos
 from core.config import load_settings
 from core.db import DB
 from ops import claude_runner
@@ -26,6 +27,8 @@ async def amain() -> None:
     port = int(os.environ.get("JARVIS_UI_PORT", "8765"))
     settings = load_settings()
     settings.state_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+    if hostos.is_windows():  # mode 0o700 does nothing there; limit the folder to this user (once per start)
+        hostos.restrict_to_user(settings.state_dir)
     db = DB(settings.db_path)  # the browser chat logs its Claude usage here, next to Ops's
     db.init()
     claude_runner.attach_db(db)
@@ -51,14 +54,12 @@ async def amain() -> None:
         await sup.autostart_if_wanted()
     if os.environ.get("JARVIS_UI_OPEN") == "1":
         webbrowser.open(url)
-    loop = asyncio.get_running_loop()
-    for sig in (signal.SIGINT, signal.SIGTERM):
-        loop.add_signal_handler(sig, stop.set)
+    hostos.install_stop_signals(asyncio.get_running_loop(), stop.set)
     await stop.wait()
     await sup.shutdown()
     await runner.cleanup()
     if restart["wanted"]:  # same interpreter, fresh code
-        os.execv(sys.executable, [sys.executable, "-m", "ui"])
+        hostos.restart_process([sys.executable, "-m", "ui"])
 
 
 if __name__ == "__main__":

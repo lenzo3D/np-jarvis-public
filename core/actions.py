@@ -9,6 +9,7 @@ from pathlib import Path
 from core import safefs
 from core.db import DB
 from core.models import PendingAction
+from core.text import safe_file_name
 
 KINDS = {"brightspace_submit", "brightspace_discussion_post", "teams_send_message"}
 TTL = timedelta(hours=24)
@@ -43,8 +44,8 @@ def prepare_submission(workspace: Path, outbox: Path, file_path) -> dict:
         data = safefs.read_file(Path(workspace), file_path)
     except (safefs.UnsafePath, OSError) as e:
         raise ValueError(f"file_path must be a regular file inside the workspace ({e})") from e
-    name = Path(file_path).name
-    safefs._check_part(name)
+    safefs._check_part(Path(file_path).name)
+    name = safe_file_name(Path(file_path).name)  # the snapshot, the card and the upload all use this clean name
     digest = hashlib.sha256(data).hexdigest()
     snap_dir = Path(outbox) / digest
     snap_dir.mkdir(parents=True, exist_ok=True, mode=0o700)

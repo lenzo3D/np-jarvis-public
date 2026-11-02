@@ -23,12 +23,12 @@ def test_write_refuses_symlinked_dir(tmp_path):
 
 def test_write_replaces_symlink_file_instead_of_following(tmp_path):
     victim = tmp_path / "victim.py"
-    victim.write_text("original")
+    victim.write_text("original", encoding="utf-8")
     ws = tmp_path / "ws"
     (ws / "c").mkdir(parents=True)
     (ws / "c" / "f.docx").symlink_to(victim)
     p = write_file(ws, ["c"], "f.docx", b"new")
-    assert victim.read_text() == "original"
+    assert victim.read_text(encoding="utf-8") == "original"
     assert not p.is_symlink() and p.read_bytes() == b"new"
 
 
@@ -42,7 +42,7 @@ def test_write_rejects_bad_names(tmp_path):
 
 def test_read_refuses_symlink(tmp_path):
     secret = tmp_path / "secrets.env"
-    secret.write_text("PASS=x")
+    secret.write_text("PASS=x", encoding="utf-8")
     ws = tmp_path / "ws"
     ws.mkdir()
     (ws / "answers.docx").symlink_to(secret)

@@ -16,9 +16,11 @@ from ui import data
 from ui import setup as setup_flow
 from core.config import env_path
 from core import groups as core_groups
+from core import usagecap
 from core.db import DB
 from ui import chats as chats_view
 from ui import inbox as inbox_view
+from ui import tasks as tasks_view
 from ui.calendar import CalendarView
 from ui.chat import WebChat
 from ui.jobs import Jobs
@@ -33,7 +35,7 @@ def _version() -> str:
     """Short git commit of the code this panel is running (shown in the sidebar)."""
     try:
         out = subprocess.run(["git", "rev-parse", "--short", "HEAD"], cwd=Path(__file__).parent, capture_output=True,
-                             text=True, timeout=3)
+                             text=True, encoding="utf-8", errors="replace", timeout=3)
         return out.stdout.strip() if out.returncode == 0 and out.stdout.strip() else "dev"
     except (OSError, subprocess.SubprocessError):
         return "dev"
@@ -86,7 +88,8 @@ class Panel:
         return web.json_response({"ops": ops, "claude": shutil.which("claude") is not None,
                                   "chat_busy": self.chat.busy, "job": self.jobs.status(),
                                   "connections": data.connections(self.settings, ops["mode"]), "version": VERSION,
-                                  "identity": {"name": persona.user_name(self.settings), "address": persona.address(self.settings)}, **ov})
+                                  "identity": {"name": persona.user_name(self.settings), "address": persona.address(self.settings)},
+                                  "usage_paused": usagecap.is_paused(self.db, self.settings.tz, datetime.now(self.settings.tz)), **ov})
 
     async def setup_status(self, request):
         return web.json_response(setup_flow.status(self.settings))
@@ -123,6 +126,31 @@ class Panel:
         except ValueError:
             days = 7
         return web.json_response(data.usage(self.settings, days))
+
+    def _cap_view(self) -> dict:
+        now = datetime.now(self.settings.tz)
+        return {**usagecap.snapshot(self.db, self.settings.tz, now), "models": usagecap.get_models(self.db),
+                "jobs": [{"key": k, "label": lab, "default": d} for k, (lab, d) in usagecap.JOBS.items()],
+                "choices": list(usagecap.MODELS)}
+
+    async def usage_cap(self, request):
+        return web.json_response(self._cap_view())
+
+    async def usage_cap_save(self, request):
+        try:
+            body = await request.json()
+        except ValueError:
+            body = None
+        if not isinstance(body, dict):
+            raise web.HTTPBadRequest(text=json.dumps({"error": "bad json"}), content_type="application/json")
+        usagecap.set_config(self.db, **{k: body[k] for k in ("daily", "weekly", "keep_group_replies") if k in body})
+        if isinstance(body.get("models"), dict):
+            usagecap.set_models(self.db, body["models"])
+        return web.json_response(self._cap_view())
+
+    async def usage_resume(self, request):
+        usagecap.resume(self.db, self.settings.tz, datetime.now(self.settings.tz))
+        return web.json_response(self._cap_view())
 
     async def calendar_month(self, request):
         today = datetime.now(self.settings.tz).date()
@@ -178,6 +206,41 @@ class Panel:
         known = {d["id"] for d in core_groups.dialogs(self.db)}
         picked = [g for g in listed if isinstance(g, dict) and g.get("id") in known]  # only groups from your own Telegram
         return web.json_response({"ok": True, "groups": core_groups.save(self.db, picked)})
+
+    async def tasks_overview(self, request):
+        return web.json_response(tasks_view.overview(self.settings, self.db, datetime.now(self.settings.tz)))
+
+    async def _json_body(self, request) -> dict:
+        try:
+            body = await request.json()
+        except ValueError:
+            raise web.HTTPBadRequest(text=json.dumps({"error": "bad json"}), content_type="application/json")
+        if not isinstance(body, dict):
+            raise web.HTTPBadRequest(text=json.dumps({"error": "bad json"}), content_type="application/json")
+        return body
+
+    async def tasks_status(self, request):
+        body = await self._json_body(request)
+        return web.json_response(tasks_view.set_status(self.settings, self.db, body.get("id"), str(body.get("status")),
+                                                       datetime.now(self.settings.tz)))
+
+    async def tasks_suggestion(self, request):
+        body = await self._json_body(request)
+        return web.json_response(tasks_view.suggestion(self.settings, self.db, body.get("id"), str(body.get("action")),
+                                                       datetime.now(self.settings.tz)))
+
+    async def tasks_confirm(self, request):
+        body = await self._json_body(request)
+        return web.json_response(tasks_view.confirm(self.settings, self.db, body.get("id"), datetime.now(self.settings.tz)))
+
+    async def tasks_edit(self, request):
+        body = await self._json_body(request)
+        return web.json_response(tasks_view.edit(self.settings, self.db, body, datetime.now(self.settings.tz)))
+
+    async def tasks_aliases(self, request):
+        body = await self._json_body(request)
+        return web.json_response(tasks_view.save_aliases(self.settings, self.db, body.get("aliases"),
+                                                         datetime.now(self.settings.tz)))
 
     async def tg_login(self, request):
         action = request.match_info["action"]
@@ -305,12 +368,21 @@ def make_app(settings, supervisor: OpsSupervisor, chat: WebChat | None = None, j
     r.add_get("/api/deadlines", panel.deadlines)
     r.add_get("/api/logs", panel.logs)
     r.add_get("/api/usage", panel.usage)
+    r.add_get("/api/usage/cap", panel.usage_cap)
+    r.add_post("/api/usage/cap", panel.usage_cap_save)
+    r.add_post("/api/usage/resume", panel.usage_resume)
     r.add_get("/api/calendar", panel.calendar_month)
     r.add_get("/api/mail", panel.mail_list)
     r.add_get("/api/mail/item", panel.mail_item)
     r.add_get("/api/chats", panel.chats_overview)
     r.add_get("/api/chats/messages", panel.chats_messages)
     r.add_post("/api/chats/groups", panel.chats_save)
+    r.add_get("/api/tasks", panel.tasks_overview)
+    r.add_post("/api/tasks/status", panel.tasks_status)
+    r.add_post("/api/tasks/edit", panel.tasks_edit)
+    r.add_post("/api/tasks/confirm", panel.tasks_confirm)
+    r.add_post("/api/tasks/suggestion", panel.tasks_suggestion)
+    r.add_post("/api/tasks/aliases", panel.tasks_aliases)
     r.add_post("/api/telegram/login/{action}", panel.tg_login)
     r.add_post("/api/update/check", panel.update_check)
     r.add_post("/api/update/apply", panel.update_apply)

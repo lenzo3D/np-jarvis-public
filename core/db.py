@@ -37,7 +37,7 @@ create table if not exists deadlines (
   key text primary key, title text not null, course_code text, kind text not null,
   start_utc text not null, end_utc text, all_day integer not null default 0, source text not null,
   source_ref text, confidence text not null, quote text, status text not null default 'active',
-  gcal_event_id text, gcal_hash text, updated_at text not null);
+  gcal_event_id text, gcal_hash text, updated_at text not null, as_event integer not null default 0);
 create table if not exists claude_usage (
   id integer primary key autoincrement, ts text not null, job text not null, kind text not null, model text,
   ok integer not null, seconds real not null, in_tokens integer, out_tokens integer, cache_tokens integer,
@@ -52,6 +52,25 @@ create virtual table if not exists emails_fts using fts5(id unindexed, subject, 
 create table if not exists group_replies (
   id integer primary key autoincrement, ts text not null, chat_id integer not null, in_msg_id integer, text text not null);
 create index if not exists group_replies_chat_ts on group_replies(chat_id, ts);
+create table if not exists deadline_reminders (
+  key text primary key, moment text not null, sent_json text not null default '[]');
+create table if not exists group_tasks (
+  id integer primary key autoincrement, chat_id integer not null, task text not null, owner_name text,
+  owner_is_me integer not null default 0, volunteered integer not null default 0, kind text not null default 'task',
+  due_utc text, all_day integer not null default 0, source_msg_id integer, source_quote text,
+  status text not null default 'open', created_at text not null, updated_at text not null, done_at text);
+create index if not exists group_tasks_chat on group_tasks(chat_id, status);
+create table if not exists group_task_seen (
+  chat_id integer not null, msg_id integer not null, primary key (chat_id, msg_id));
+create table if not exists group_task_suggestions (
+  id integer primary key autoincrement, task_id integer not null, chat_id integer not null, new_status text not null,
+  claimed_by text, msg_id integer, quote text, state text not null default 'pending', created_at text not null,
+  kind text not null default 'close', new_due text, new_all_day integer not null default 0);
+create index if not exists group_task_suggestions_task on group_task_suggestions(task_id, state);
+create table if not exists group_decisions (
+  id integer primary key autoincrement, chat_id integer not null, text text not null, source_msg_id integer,
+  source_quote text, created_at text not null);
+create index if not exists group_decisions_chat on group_decisions(chat_id, created_at);
 create table if not exists source_health (
   source text primary key, last_ok text, consecutive_failures integer not null default 0);
 """
@@ -67,11 +86,26 @@ class DB:
     def init(self) -> None:
         self.conn.execute("pragma journal_mode=wal")
         self.conn.executescript(SCHEMA)
-        for migration in ("alter table materials add column extracted_version text",):
+        for migration in ("alter table materials add column extracted_version text",
+                          "alter table due_dates add column user_confirmed integer not null default 0",
+                          "alter table due_dates add column snooze_until text",
+                          "alter table due_dates add column confirm_note_sent integer not null default 0",
+                          "alter table due_dates add column missed_sent integer not null default 0",
+                          "alter table group_messages add column sender_id integer",
+                          "alter table group_tasks add column assigned_by text",
+                          "alter table group_tasks add column confirmed integer not null default 0",
+                          "alter table group_tasks add column date_note text",
+                          "alter table group_task_suggestions add column kind text not null default 'close'",
+                          "alter table group_task_suggestions add column new_due text",
+                          "alter table group_task_suggestions add column new_all_day integer not null default 0",
+                          "alter table deadlines add column as_event integer not null default 0"):  # old rows stay due moments
             try:
                 self.conn.execute(migration)
             except sqlite3.OperationalError:
-                pass  # already applied
+                continue  # already applied
+            if "confirm_note_sent" in migration:  # old submissions must not get a "Submission confirmed" note now
+                self.conn.execute("update due_dates set confirm_note_sent=1 where submitted=1")
+        self.conn.execute("delete from settings where key like 'project_tasks_wm:%'")  # retired watermark
 
     def get_item(self, source: str, stable_id: str) -> sqlite3.Row | None:
         return self.conn.execute(

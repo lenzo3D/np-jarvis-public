@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from apscheduler.triggers.cron import CronTrigger
 
-from ops import briefing, deadline_jobs, mail_jobs, reminders, watcher
+from ops import briefing, deadline_jobs, mail_jobs, project_tasks, reminders, usage_watch, watcher
 
 TZ = "Asia/Singapore"
 
@@ -18,20 +18,26 @@ def register(sched, services) -> None:
                   args=[services], id="flush_batch", **opts)
     sched.add_job(watcher.flush_retry, CronTrigger(minute="*/5", timezone=TZ),
                   args=[services], id="flush_retry", **opts)
-    sched.add_job(reminders.run_reminders, CronTrigger(minute="*/15", timezone=TZ),
+    sched.add_job(reminders.run_reminders, CronTrigger(minute="*/5", timezone=TZ),
                   args=[services], id="reminders", **opts)
     sched.add_job(mail_jobs.sweep_outlook, CronTrigger(minute="*/10", hour="7-23", timezone=TZ),
                   args=[services], id="mail_day", **opts)
     sched.add_job(mail_jobs.sweep_outlook, CronTrigger(minute=20, hour="0-6", timezone=TZ),
                   args=[services], id="mail_night", **opts)
-    sched.add_job(watcher.sweep_teams, CronTrigger(minute="*/10", timezone=TZ),
+    sched.add_job(watcher.sweep_teams, CronTrigger(minute="*/10", hour="7-23", timezone=TZ),
                   args=[services], id="teams", **opts)
+    sched.add_job(watcher.sweep_teams, CronTrigger(minute=0, hour="0-6", timezone=TZ),
+                  args=[services], id="teams_night", **opts)
+    sched.add_job(usage_watch.check, CronTrigger(minute="*/5", timezone=TZ),
+                  args=[services], id="usage_cap", **opts)
     sched.add_job(briefing.scheduled_group_summary, CronTrigger(hour="13,18,22", minute=0, timezone=TZ),
                   args=[services], id="group_summary", **opts)
     sched.add_job(briefing.check_group_threshold, CronTrigger(minute="*/15", timezone=TZ),
                   args=[services], id="group_threshold", **opts)
     sched.add_job(briefing.maybe_daily_briefing, CronTrigger(minute="*/5", timezone=TZ),
                   args=[services], id="briefing", **opts)
+    sched.add_job(project_tasks.maybe_weekly_digest, CronTrigger(minute="*/5", timezone=TZ),
+                  args=[services], id="project_digest", **opts)
     sched.add_job(deadline_jobs.confirmed_job, CronTrigger(minute="7,22,37,52", timezone=TZ),
                   args=[services], id="deadlines_confirmed", **opts)
     sched.add_job(deadline_jobs.extract_job, CronTrigger(minute=40, hour="7-23", timezone=TZ),

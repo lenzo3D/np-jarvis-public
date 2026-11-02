@@ -24,3 +24,12 @@ def test_plain_text_untouched():
     t = "Fri 30 Oct 23:29 · Investments: Tutorial 5 → done (2 * 3 = 6)"
     assert plain(t) == t
     assert plain("") == "" and plain(None) == ""
+
+
+def test_rich_text_is_decoded_exactly_once():
+    from core.text import html_to_text, plain_to_text, rich_to_text
+    assert html_to_text("<p>a &amp;lt;b&amp;gt; c</p>") == "a &lt;b&gt; c"      # one level only
+    assert plain_to_text("a &amp;lt;b&amp;gt;  c") == "a &amp;lt;b&amp;gt; c"   # plain text is never decoded
+    assert rich_to_text({"Text": "x &amp;lt; y"}) == "x &amp;lt; y"
+    assert rich_to_text({"Html": "<p>x &amp;lt; y</p>", "Text": "ignored"}) == "x &lt; y"
+    assert rich_to_text(None) == "" and rich_to_text({"Text": "", "Html": None}) == ""

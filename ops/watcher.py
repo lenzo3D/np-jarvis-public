@@ -6,6 +6,8 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Awaitable, Callable
 
+import httpx
+
 from core.auth import AuthRequired
 from core.config import Settings
 from core.db import DB
@@ -174,7 +176,14 @@ async def run_source(ctx: Services, source: str, collect: Callable[[], Awaitable
         await ctx.notifier.send(f"{name} is back to normal.")
     if on_items:
         on_items(items)
-    changes = detect(db, source, items, now)
+    fresh: dict[str, int] = {}
+    changes = detect(db, source, items, now, fresh, ctx.extra.pop(f"sweep_courses:{source}", None))
+    names = db.get_json_setting("course_names", {})
+    for code, n in fresh.items():  # a course seen for the first time is indexed silently: one line instead of a flood
+        try:
+            await ctx.notifier.send(f"New course added: {names.get(code) or code} — {n} items indexed.")
+        except Exception as e:  # noqa: BLE001
+            log.warning("new-course note failed: %s", e)
     await deliver(ctx, changes)
     return changes
 
@@ -191,6 +200,11 @@ def _upsert_due_dates(db: DB, items: list[Item]) -> None:
                  reminders_sent_json = case when due_dates.due_at is excluded.due_at
                                             then due_dates.reminders_sent_json else '[]' end,
                  submitted = case when due_dates.due_at is excluded.due_at then due_dates.submitted else 0 end,
+                 user_confirmed = case when due_dates.due_at is excluded.due_at then due_dates.user_confirmed else 0 end,
+                 snooze_until = case when due_dates.due_at is excluded.due_at then due_dates.snooze_until else null end,
+                 confirm_note_sent = case when due_dates.due_at is excluded.due_at
+                                          then due_dates.confirm_note_sent else 0 end,
+                 missed_sent = case when due_dates.due_at is excluded.due_at then due_dates.missed_sent else 0 end,
                  due_at = excluded.due_at""",
             (it.stable_id, due),
         )
@@ -217,7 +231,9 @@ async def _refresh_submitted(ctx: Services, items: list[Item]) -> None:
             continue
         try:
             if await ctx.bs.submitted(it.payload["ou"], it.payload["folder_id"]):
-                ctx.db.conn.execute("update due_dates set submitted=1 where item_key=?", (it.stable_id,))
+                # found long before the deadline: no "Submission confirmed" note later (it is for the final 24 h)
+                ctx.db.conn.execute("update due_dates set submitted=1, confirm_note_sent=? where item_key=?",
+                                    (int(due - now > timedelta(hours=24)), it.stable_id))
         except AuthRequired:
             raise
         except Exception as e:  # noqa: BLE001
@@ -229,17 +245,30 @@ async def sweep_brightspace(ctx: Services) -> list[Change]:
         items: list[Item] = []
         calls = failures = 0
         last_error: Exception | None = None
-        for c in await ctx.bs.courses():
+        courses = await ctx.bs.courses()
+        complete: set[int] = set()  # courses whose fetches ALL worked: only those may be baselined as "new"
+        ctx.extra["sweep_courses:brightspace"] = complete
+        for c in courses:
+            before = failures
             for fetch in (ctx.bs.assignment_items, ctx.bs.announcements, ctx.bs.content_items, ctx.bs.grades):
                 calls += 1
                 try:
                     items += await fetch(c.ou, c.code)
                 except AuthRequired:
-                    raise
+                    raise  # (a 403 only gets here as AuthRequired when whoami also fails)
+                except httpx.HTTPStatusError as e:
+                    if e.response.status_code == 403:  # tool switched off in this course: a successful empty read
+                        log.info("%s %s is switched off (403)", c.code, getattr(fetch, "__name__", fetch))
+                        continue
+                    failures += 1
+                    last_error = e
+                    log.warning("%s %s failed: %s", c.code, getattr(fetch, "__name__", fetch), e)
                 except Exception as e:  # noqa: BLE001 - one disabled tool must not stop the sweep
                     failures += 1
                     last_error = e
                     log.warning("%s %s failed: %s", c.code, getattr(fetch, "__name__", fetch), e)
+            if failures == before:
+                complete.add(c.ou)
         if calls and failures == calls and last_error:
             raise last_error
         _upsert_due_dates(ctx.db, items)

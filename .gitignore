@@ -14,3 +14,6 @@ tests/fixtures/bs/
 docs/probe-results.md
 state/
 *.egg-info/
+
+# Personal study log: never publish
+HANDOFF.md

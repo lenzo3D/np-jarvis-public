@@ -123,18 +123,18 @@ async def test_download_refuses_symlinked_folder(client, tmp_path):
 async def test_download_does_not_write_through_symlinked_file(client, tmp_path):
     s = client.services
     victim = tmp_path / "approvals.py"
-    victim.write_text("original")
+    victim.write_text("original", encoding="utf-8")
     d = s.settings.workspace_dir / "INV2101" / "downloads"
     d.mkdir(parents=True)
     (d / "topic-702.docx").symlink_to(victim)
     r = await client.post("/download", json={"course": "INV2101", "topic_id": 702})
-    assert r.status == 200 and victim.read_text() == "original"
+    assert r.status == 200 and victim.read_text(encoding="utf-8") == "original"
 
 
 async def test_send_file_refuses_symlink(client, tmp_path):
     s = client.services
     secret = tmp_path / "secrets.env"
-    secret.write_text("PASS=x")
+    secret.write_text("PASS=x", encoding="utf-8")
     (s.settings.workspace_dir / "a.docx").symlink_to(secret)
     r = await client.post("/send_file", json={"path": str(s.settings.workspace_dir / "a.docx")})
     assert r.status == 400 and s.notifier.files == []
@@ -157,3 +157,28 @@ async def test_deadlines_and_material_routes(client):
     assert "Week 9 quiz" in m["text"]["text"]
     lst = await (await client.get("/material/list", params={"kind": "document"})).json()
     assert [x["key"] for x in lst] == ["bs:content:1"]
+
+
+NUMBER_ROUTES = [("/due", "days"), ("/calendar", "days"), ("/teams/read?id=x", "limit"), ("/group/search", "limit"),
+                 ("/group/recent", "hours"), ("/mail/recent", "hours"), ("/mail/recent", "limit"),
+                 ("/mail/search", "limit"), ("/deadlines", "days"), ("/material/search", "limit")]
+
+
+@pytest.mark.parametrize("path,name", NUMBER_ROUTES)
+@pytest.mark.parametrize("bad", ["abc", "1.5", "nan", "inf", "-3", "99999999999999999999999"])
+async def test_bad_number_parameters_are_400_with_a_message(client, path, name, bad):
+    sep = "&" if "?" in path else "?"
+    r = await client.get(f"{path}{sep}{name}={bad}")
+    assert r.status == 400, (path, name, bad, await r.text())
+    body = await r.json()
+    assert name in body["error"]
+
+
+async def test_bad_numbers_in_body_and_path_are_400(client):
+    r = await client.post("/download", json={"course": "INV2101", "topic_id": "nope"})
+    assert r.status == 400 and "topic_id" in (await r.json())["error"]
+    r = await client.post("/download", data="{not json", headers={"Content-Type": "application/json"})
+    assert r.status == 400
+    r = await client.post("/project/tasks/status", json={"id": "x", "status": "done"})
+    assert r.status == 400
+    assert (await client.get("/due?days=3")).status == 200

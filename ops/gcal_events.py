@@ -6,15 +6,16 @@ import json
 import re
 from datetime import date, datetime, timedelta
 
-from core.deadlines import Deadline
+from core.deadlines import Deadline, is_due
+from core.project_tasks import clean_text
 
-DEADLINE_KINDS = {"assignment", "homework", "other"}
 TEST_KINDS = {"quiz", "test", "exam", "presentation"}
 KIND_LABEL = {"assignment": "Assignment due", "homework": "Homework due", "quiz": "Quiz", "test": "Test",
               "exam": "Exam", "presentation": "Presentation", "meeting": "Meeting", "other": "Deadline"}
 CONFIRMED_ICON, TENTATIVE_ICON = "\U0001F4CC", "\u2753"  # pushpin: certain; question mark: unverified
 SOURCE_LABEL = {"brightspace": "POLITEMall", "announcement": "POLITEMall announcement",
-                "document": "course document", "teams": "Teams", "group": "Telegram group", "email": "School email"}
+                "document": "course document", "teams": "Teams", "group": "Telegram group", "email": "School email",
+                "project": "Project group chat"}
 
 
 def short_course(name: str, code: str | None) -> str:
@@ -28,11 +29,13 @@ def short_course(name: str, code: str | None) -> str:
     return "School"
 
 
-def _reminders(kind: str) -> dict:
+def _reminders(kind: str, as_event: bool = False) -> dict:
     if kind == "meeting":
         mins = [30]
     elif kind in TEST_KINDS:
         mins = [1440]
+    elif kind == "other" and not is_due(kind, as_event):
+        mins = [1440, 60]  # a timed event with no kind: a day before and an hour before
     else:
         mins = [1440, 180]
     return {"useDefault": False, "overrides": [{"method": "popup", "minutes": m} for m in mins]}
@@ -44,7 +47,12 @@ def _dt(iso: str, tz) -> dict:
 
 def event_body(d: Deadline, course_name: str, tz) -> dict:
     prefix = CONFIRMED_ICON if d.confidence == "confirmed" else TENTATIVE_ICON
-    summary = f"{prefix} {short_course(course_name, d.course_code)}: {d.title}"[:250]
+    tentative = d.confidence != "confirmed"
+    # text read by a model from other people's messages: no links (a calendar invite can be a phishing vehicle)
+    title = clean_text(d.title, urls=True) if tentative else d.title
+    quote = clean_text(d.quote, urls=True) if tentative else d.quote
+    label = "Project group" if d.source == "project" else short_course(course_name, d.course_code)
+    summary = (f"{prefix} {title}" if d.source == "project" else f"{prefix} {label}: {title}")[:250]
     if d.all_day:
         day = date.fromisoformat(d.start_utc[:10])
         start, end = {"date": day.isoformat()}, {"date": (day + timedelta(days=1)).isoformat()}
@@ -52,17 +60,18 @@ def event_body(d: Deadline, course_name: str, tz) -> dict:
         s = datetime.fromisoformat(d.start_utc)
         if d.end_utc:
             e = datetime.fromisoformat(d.end_utc)
-        elif d.kind in DEADLINE_KINDS:
+        elif is_due(d.kind, d.as_event):
             s, e = s - timedelta(minutes=30), s
         else:
-            e = s + timedelta(hours=1)
+            e = s + timedelta(hours=1)  # default length of a timed event that has no end
         start, end = _dt(s.isoformat(), tz), _dt(e.isoformat(), tz)
-    lines = [f"{KIND_LABEL.get(d.kind, 'Deadline')} — {short_course(course_name, d.course_code)}",
+    kind_label = "Event" if d.kind == "other" and not is_due(d.kind, d.as_event) else KIND_LABEL.get(d.kind, "Deadline")
+    lines = [f"{kind_label} — {label}",
              f"Source: {SOURCE_LABEL.get(d.source, d.source)}"]
     if d.confidence != "confirmed":
         lines.append(f"{TENTATIVE_ICON} Tentative: read from text by JARVIS — double-check the date.")
-    if d.quote:
-        lines.append(f'Quote: "{d.quote[:300]}"')
+    if quote:
+        lines.append(f'Quote: "{quote[:300]}"')
     if d.source_ref.startswith("http"):
         lines.append(d.source_ref)
     lines.append("Added by JARVIS — edits to this event may be overwritten; delete it to stop JARVIS re-adding it.")
@@ -71,7 +80,7 @@ def event_body(d: Deadline, course_name: str, tz) -> dict:
         "description": "\n".join(lines),
         "start": start,
         "end": end,
-        "reminders": _reminders(d.kind),
+        "reminders": _reminders(d.kind, d.as_event),
         "extendedProperties": {"private": {"jarvis": "1", "jarvis_key": d.key}},
     }
 

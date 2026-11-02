@@ -13,6 +13,7 @@ import asyncio
 import base64
 import json
 import logging
+import re
 import time
 from datetime import datetime, timezone
 from typing import Awaitable, Callable
@@ -37,6 +38,7 @@ SELECT = {
             "InferenceClassification,Body",
 }
 TOKEN_REUSE_MARGIN = 120
+MAX_PAGES = 5
 _TOKEN_JS = r"""async () => {
   // Newer Microsoft sign-in code (msal-browser 4.x) keeps its token cache in localStorage ENCRYPTED: each entry is
   // {id, nonce, data}, AES-GCM with a key derived (HKDF-SHA256, salt = nonce) from the base key stored in the
@@ -124,7 +126,13 @@ def remember_probe(db, report: dict, now: datetime) -> bool:
 
 
 class MailUnavailable(Exception):
-    """The mailbox could not be read with any known method. The message says why (never includes mail content)."""
+    """The mailbox could not be read with any known method. The message says why (never includes mail content).
+    `transient` = only network errors / 5xx / throttling were seen, so nothing about the login or method is known to be wrong."""
+
+    def __init__(self, message: str = "", transient: bool = False, hard: bool = False):
+        super().__init__(message)
+        self.transient = transient
+        self.hard = hard  # the saved method was refused (401) even with freshly read tokens: say so at once, no waiting
 
 
 def jwt_claims(token: str) -> dict:
@@ -145,21 +153,36 @@ def _lower(d):
 def _parse_dt(value: str | None) -> datetime:
     if not value:
         return datetime.now(timezone.utc)
-    dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    try:
+        dt = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except ValueError:
+        return datetime.now(timezone.utc)
     return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
 
 
+BODY_LIMIT = 20000  # characters kept per message; longer bodies are cut with a trailing "…"
+
+
+def _body_text(body: dict) -> str:
+    content = str(body.get("content") or "")
+    if str(body.get("contenttype", "")).lower() == "html":
+        return html_to_text(content, limit=BODY_LIMIT)
+    content = re.sub(r"\n{3,}", "\n\n", content.replace("\r\n", "\n").replace("\r", "\n")).strip()
+    return content[:BODY_LIMIT].rstrip() + "…" if len(content) > BODY_LIMIT else content
+
+
 def mail_from_json(raw: dict) -> Mail:
-    """One message from Microsoft Graph (camelCase) or Outlook REST v2.0 (PascalCase)."""
+    """One message from Microsoft Graph (camelCase) or Outlook REST v2.0 (PascalCase). Tolerates missing sender/subject."""
     d = _lower(raw)
-    addr = ((d.get("from") or {}).get("emailaddress") or {})
-    body = d.get("body") or {}
-    content = body.get("content") or ""
-    text = html_to_text(content, limit=20000) if str(body.get("contenttype", "")).lower() == "html" else content[:20000]
+    who = d.get("from") if isinstance(d.get("from"), dict) else d.get("sender")  # drafts and some system mail only have "sender"
+    addr = (who or {}).get("emailaddress") if isinstance(who, dict) else None
+    addr = addr if isinstance(addr, dict) else {}
+    address = str(addr.get("address") or "").strip()
+    body = d.get("body") if isinstance(d.get("body"), dict) else {}
     return Mail(id=str(d.get("id") or ""), received=_parse_dt(d.get("receiveddatetime")),
-                sender_name=(addr.get("name") or addr.get("address") or "").strip(), sender_addr=(addr.get("address") or "").strip(),
-                subject=(d.get("subject") or "(no subject)").strip(), preview=(d.get("bodypreview") or "").strip()[:300],
-                body=text, is_read=bool(d.get("isread")), has_attachments=bool(d.get("hasattachments")),
+                sender_name=str(addr.get("name") or address).strip() or "(unknown sender)", sender_addr=address,
+                subject=str(d.get("subject") or "").strip() or "(no subject)", preview=str(d.get("bodypreview") or "").strip()[:300],
+                body=_body_text(body), is_read=bool(d.get("isread")), has_attachments=bool(d.get("hasattachments")),
                 importance=str(d.get("importance") or "normal").lower(), web_link=d.get("weblink") or "",
                 conv_id=str(d.get("conversationid") or ""), inbox_tab=str(d.get("inferenceclassification") or "").lower())
 
@@ -212,9 +235,10 @@ class Outlook:
         return tokens
 
     # ---------- http ----------
-    async def _get(self, endpoint: dict, token: str, params: dict) -> httpx.Response:
+    async def _get(self, endpoint: dict, token: str, params: dict | None, url: str | None = None) -> httpx.Response:
+        """The only place this module talks to the mailbox, and it only ever issues GET."""
         async with httpx.AsyncClient(timeout=self.timeout) as c:
-            return await c.get(endpoint["url"], params=params, headers={
+            return await c.get(url or endpoint["url"], params=params, headers={
                 "Authorization": f"Bearer {token}", "Accept": "application/json",
                 "Prefer": 'outlook.body-content-type="text"'})
 
@@ -293,29 +317,91 @@ class Outlook:
 
     # ---------- reading ----------
     async def recent(self, since: datetime | None = None, limit: int = 40) -> list[Mail]:
-        """Newest inbox messages (bodies as plain text). Raises MailUnavailable when no method works."""
+        """Newest inbox messages (bodies as plain text), following the API's paging until `limit` or no more.
+        Tries the saved method first, then the other known ones; if a token is rejected, the tokens are re-read from the
+        browser once and everything is tried again. Raises MailUnavailable (transient=True when it was only network
+        errors / 5xx / throttling)."""
         order = sorted(ENDPOINTS, key=lambda e: e["name"] != self.strategy)
-        last = "no tokens found in the Outlook web session"
+        last, transient, hard = "no tokens found in the Outlook web session", False, False
         for attempt in (0, 1):
             tokens = await self._tokens(fresh=attempt == 1)
             if not tokens:
                 d = self.token_diag
                 last = ("Outlook keeps its tokens encrypted and none could be opened" if d.get("encrypted") and not d.get("decrypted")
                         else "no access tokens found in the Outlook web session")
+                transient = hard = False
                 continue
+            rejected = soft = saved_soft = saved_rejected = saved_401 = False
             for ep in order:
+                is_saved = ep["name"] == self.strategy
                 for t in _best_first(ep, tokens):
-                    params = self._params(ep, since, limit)
                     try:
-                        r = await self._get(ep, t["secret"], params)
+                        r = await self._get(ep, t["secret"], self._params(ep, since, limit))
                     except httpx.HTTPError as e:
-                        last = f"{ep['name']}: {type(e).__name__}"
+                        last, soft = f"{ep['name']}: {type(e).__name__}", True
+                        saved_soft = saved_soft or is_saved
                         continue
                     if r.status_code == 200:
+                        try:
+                            mails = await self._read_pages(ep, t["secret"], r, limit)
+                        except ValueError:  # a 200 that was not JSON (captive portal, proxy error page)
+                            last, soft = f"{ep['name']}: unreadable response", True
+                            saved_soft = saved_soft or is_saved
+                            continue
                         self.strategy = ep["name"]
-                        return [m for m in (mail_from_json(x) for x in r.json().get("value", [])) if m.id]
+                        return mails
                     last = f"{ep['name']}: HTTP {r.status_code}"
-        raise MailUnavailable(f"Could not read the mailbox ({last}). Run Check Outlook access in Logins & Tools.")
+                    if r.status_code == 429 or r.status_code >= 500:
+                        soft = True
+                        saved_soft = saved_soft or is_saved
+                    else:
+                        rejected = True  # 401/403/404/410...: wrong token or wrong method, so try the others
+                        saved_rejected = saved_rejected or is_saved
+                        saved_401 = saved_401 or (is_saved and r.status_code == 401)
+            # With a saved method, only ITS answer decides: the other methods are expected to be refused (on the NP
+            # tenant only outlook365-rest works), so their 401/403 must not turn a blip on the good one into a hard failure.
+            transient = (saved_soft and not saved_rejected) if self.strategy else (soft and not rejected)
+            hard = attempt == 1 and saved_401
+            if transient:
+                break  # nothing a fresh token would fix
+        raise MailUnavailable(f"Could not read the mailbox ({last}). Run Check Outlook access in Logins & Tools.", transient, hard)
+
+    async def _read_pages(self, ep: dict, token: str, first: httpx.Response, limit: int) -> list[Mail]:
+        """Messages from a 200 response plus the following pages (newest first). A failed later page raises, so the
+        sweep fails and retries from the same point instead of silently skipping mail."""
+        host = ep["url"].split("/")[2]
+        out: dict[str, Mail] = {}
+        r, pages = first, 1
+        while True:
+            try:
+                body = r.json()
+                if not isinstance(body, dict) or not isinstance(body.get("value", []), list):
+                    raise ValueError("unexpected JSON shape")
+            except ValueError:
+                if pages == 1:
+                    raise  # the caller treats it as a bad answer from this endpoint
+                raise MailUnavailable(f"Could not read page {pages} of the mailbox ({ep['name']}: unreadable response).", True)
+            for raw in body.get("value", []):
+                try:
+                    m = mail_from_json(raw)
+                except Exception:  # noqa: BLE001 - one odd message must not hide the rest
+                    log.warning("skipped an unreadable message")
+                    continue
+                if m.id:
+                    out.setdefault(m.id, m)
+            nxt = body.get("@odata.nextLink")
+            # Only follow a next-page link on the same host, so the bearer token never goes anywhere else.
+            if len(out) >= limit or not nxt or pages >= MAX_PAGES or not str(nxt).startswith("https://" + host + "/"):
+                break
+            try:
+                r = await self._get(ep, token, None, url=nxt)
+            except httpx.HTTPError as e:
+                raise MailUnavailable(f"Could not read page {pages + 1} of the mailbox ({ep['name']}: {type(e).__name__}).", True)
+            if r.status_code != 200:
+                raise MailUnavailable(f"Could not read page {pages + 1} of the mailbox ({ep['name']}: HTTP {r.status_code}).",
+                                      r.status_code == 429 or r.status_code >= 500)
+            pages += 1
+        return list(out.values())[:limit]
 
     @staticmethod
     def _params(ep: dict, since: datetime | None, limit: int) -> dict:

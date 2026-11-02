@@ -13,10 +13,36 @@ from zoneinfo import ZoneInfo
 from core.db import DB
 
 SGT = ZoneInfo("Asia/Singapore")
-DEADLINE_KINDS = {"assignment", "homework", "other"}
+DUE_WORD_RE = re.compile(r"(?i)\b(due|deadline|submit\w*|submission|hand(?:ing)?[\s-]*in)\b")
 STOPWORDS = {"the", "a", "an", "for", "of", "to", "and", "on", "in", "due", "submission", "submit", "by"}
 CONTENT_FIELDS = ("title", "course_code", "kind", "start_utc", "end_utc", "all_day", "source", "source_ref",
                   "confidence", "quote")
+
+
+EVENT_WORD_RE = re.compile(r"(?i)\b(meeting|briefing|talk|session|rehearsal|workshop|seminar|clinic|consultation|"
+                           r"webinar|trip|visit|orientation|fair)\b")
+
+
+def is_due(kind: str, as_event: bool = False) -> bool:
+    """A due moment (a short block ending at the due time) rather than an event with its own start. Assignments and
+    homework always are. A kind "other" is a due moment unless it was stored as an event (`Deadline.as_event`, decided
+    once when the row was created by `event_like`); rows from before that column existed keep behaving as due moments."""
+    return kind in ("assignment", "homework") or (kind == "other" and not as_event)
+
+
+def event_like(kind: str, title: str, start: datetime | None, end: datetime | None, tz=SGT) -> bool:
+    """Only a NEW timed "other" item that clearly describes an event: named like one (meeting, briefing, talk...) and
+    not worded as a due date, or a start..end range on one local day."""
+    if kind != "other" or DUE_WORD_RE.search(title or ""):
+        return False
+    if EVENT_WORD_RE.search(title or ""):
+        return True
+    return bool(start and end and end > start and start.astimezone(tz).date() == end.astimezone(tz).date())
+
+
+def display_moment(d) -> str:
+    """The moment shown for a deadline in lists: the start of an event, else the due time (end) when there is one."""
+    return d.start_utc if d.as_event else (d.end_utc or d.start_utc)
 
 
 @dataclass
@@ -35,13 +61,14 @@ class Deadline:
     status: str = "active"
     gcal_event_id: str | None = None
     gcal_hash: str | None = None
+    as_event: bool = False  # kind other only: a timed event, not a due moment. Set once at creation, never re-decided
 
 
 def local_date(d: Deadline, tz=SGT) -> date:
     """The day a deadline belongs to: the due moment (end) for deadline kinds, else the start."""
     if d.all_day:
         return date.fromisoformat(d.start_utc[:10])
-    moment = d.end_utc if d.end_utc and d.kind in DEADLINE_KINDS else d.start_utc
+    moment = d.end_utc if d.end_utc and is_due(d.kind, d.as_event) else d.start_utc
     return datetime.fromisoformat(moment).astimezone(tz).date()
 
 
@@ -91,6 +118,7 @@ class DeadlineStore:
         names = {f.name for f in fields(Deadline)}
         d = Deadline(**{k: r[k] for k in r.keys() if k in names})
         d.all_day = bool(d.all_day)
+        d.as_event = bool(d.as_event)
         return d
 
     def get(self, key: str) -> Deadline | None:
@@ -106,9 +134,9 @@ class DeadlineStore:
         values["all_day"] = int(bool(values["all_day"]))
         if cur is None:
             self.db.conn.execute(
-                f"insert into deadlines(key, {', '.join(CONTENT_FIELDS)}, status, updated_at) "
-                f"values (?, {', '.join('?' for _ in CONTENT_FIELDS)}, 'active', ?)",
-                (d.key, *values.values(), now.isoformat()))
+                f"insert into deadlines(key, {', '.join(CONTENT_FIELDS)}, status, updated_at, as_event) "
+                f"values (?, {', '.join('?' for _ in CONTENT_FIELDS)}, 'active', ?, ?)",
+                (d.key, *values.values(), now.isoformat(), int(bool(d.as_event))))
             return True
         old = {k: getattr(cur, k) for k in CONTENT_FIELDS}
         old["all_day"] = int(bool(old["all_day"]))

@@ -17,6 +17,6 @@ Reply with ONLY this JSON, no prose, no code fence:
   "date": "YYYY-MM-DD", "time": "HH:MM or null", "end_time": "HH:MM or null",
   "quote": "<exact sentence from the text, max 200 chars>"}]}
 
-Rules: convert "Week N" to the Monday of that week only if a semester start is given above; otherwise skip
-week-only dates. For a deadline "by 23:59" put 23:59 in time. Use null time when only a day is known.
+Rules: convert "Week N" (or "recess week") to its Monday using the week table above, never by your own arithmetic;
+if there is no table, skip week-only dates. A date in the recess week is a real date: keep it. For a deadline "by 23:59" put 23:59 in time. Use null time when only a day is known.
 Return {"deadlines": []} when there is nothing.

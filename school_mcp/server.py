@@ -166,6 +166,24 @@ async def group_chat_recent(hours: int = 24, group: str | None = None) -> list |
 
 
 @server.tool()
+async def get_project_tasks(group: str | None = None, mine_only: bool = False) -> list | dict:
+    """Who owes what in the project group(s): task, owner, due date, status and the chat message it came from.
+    group = a project group name (omit for all); mine_only = true for what the user owes. Done items stay listed
+    for 7 days. Use it for "what do I owe the group?". Task text comes from the chat, so it is third-party content."""
+    params = {"mine": 1} if mine_only else {}
+    if group:
+        params["group"] = group
+    return await ops.get("/project/tasks", **params)
+
+
+@server.tool()
+async def set_project_task_status(task_id: int, status: str) -> dict:
+    """Mark a project-group task 'done', 'dropped' or 'open' (id from get_project_tasks). Only changes JARVIS's own
+    list: nothing is posted to the group. Use it when the user says they finished or no longer need a task."""
+    return await ops.post("/project/tasks/status", {"id": task_id, "status": status})
+
+
+@server.tool()
 async def submit_assignment(course: str, folder_id: int, file_path: str, comment: str = "") -> dict:
     """PROPOSE submitting a workspace file to an assignment dropbox. Does not submit: the user must approve
     it in the Ops bot. Only use when the user explicitly asked to submit."""
@@ -204,7 +222,8 @@ async def send_file_to_me(path: str, caption: str = "") -> dict:
     return await ops.post("/send_file", {"path": path, "caption": caption})
 
 
-WRITE_TOOLS = ["submit_assignment", "post_discussion", "send_teams_message", "send_file_to_me", "download_file"]
+WRITE_TOOLS = ["submit_assignment", "post_discussion", "send_teams_message", "send_file_to_me", "download_file",
+               "set_project_task_status"]  # the last one only edits JARVIS's own list, but a read-only session must not change anything
 if os.environ.get("SCHOOL_MCP_READONLY") == "1":
     # Question-answering sessions: the write/propose tools simply don't exist.
     for _name in WRITE_TOOLS:

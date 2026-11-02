@@ -6,7 +6,6 @@ when to try again (avoids account lockout).
 from __future__ import annotations
 
 import asyncio
-import fcntl
 import json
 import os
 import logging
@@ -18,6 +17,7 @@ from typing import Awaitable, Callable, Literal
 
 import httpx
 
+from core import hostos
 from core.config import Settings, load_settings
 
 Site = Literal["brightspace", "teams", "outlook"]
@@ -162,7 +162,7 @@ class SessionManager:
         path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
         tmp = path.with_suffix(".tmp")
         fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-        with os.fdopen(fd, "w") as fh:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
             json.dump(cookies, fh)
         os.replace(tmp, path)
 
@@ -171,7 +171,7 @@ class SessionManager:
         if not path.exists():
             return
         try:
-            cookies = json.loads(path.read_text())
+            cookies = json.loads(path.read_text(encoding="utf-8"))
             if not cookies:
                 return
             # The saved copy can be older than what the browser profile already holds: only fill in what is missing,
@@ -307,9 +307,7 @@ class SessionManager:
             if await self.is_valid(site):
                 return
             lock_path = self.settings.state_dir / f"login-{site}.lock"
-            lock_path.parent.mkdir(parents=True, exist_ok=True)
-            with open(lock_path, "w") as fh:
-                fcntl.flock(fh, fcntl.LOCK_EX)
+            with hostos.file_lock(lock_path):
                 try:
                     self.login_in_progress.add(site)
                     try:
@@ -326,7 +324,6 @@ class SessionManager:
                     await self.save_cookies(site)
                 finally:
                     self.login_in_progress.discard(site)
-                    fcntl.flock(fh, fcntl.LOCK_UN)
 
     async def _flow_live(self, site: str, notify: MfaNotifier) -> None:
         ctx = await self.context(site)  # type: ignore[arg-type]

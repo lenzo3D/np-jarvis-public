@@ -27,7 +27,7 @@ async def _run(*cmd: str, cwd: Path, timeout: float) -> tuple[int, str]:
         return 124, "timed out"
     except OSError as e:
         return 127, str(e)
-    out_s, err_s = out.decode(errors="replace").strip(), err.decode(errors="replace").strip()
+    out_s, err_s = out.decode("utf-8", errors="replace").strip(), err.decode("utf-8", errors="replace").strip()
     return proc.returncode, out_s if proc.returncode == 0 else (err_s or out_s)
 
 

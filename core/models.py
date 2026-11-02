@@ -41,6 +41,7 @@ class GroupMessage:
     sender: str
     text: str
     ts: datetime
+    sender_id: int | None = None  # Telegram user id of the sender (None when unknown); tells "me" apart reliably
 
 
 @dataclass

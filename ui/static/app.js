@@ -50,9 +50,10 @@ function showView(name) {
   if (name === "overview") { loadFeed(); loadCalls(); }
   if (name === "calendar") loadCalendar();
   if (name === "chats") loadChats();
+  if (name === "tasks") loadTasks();
   if (name === "inbox") loadInbox();
   if (name === "deadlines") loadDeadlines();
-  if (name === "usage") loadUsage();
+  if (name === "usage") { loadUsage(); capLoaded = false; loadCap(); }
   if (name === "logs") loadLogs();
   if (name === "tools") loadTools();
   if (name === "chat") { const l = $("chat-log"); l.scrollTop = l.scrollHeight; }
@@ -124,7 +125,9 @@ async function refreshState() {
   $("btn-start").hidden = live || mode === "external";
   $("btn-stop").hidden = !live;
   $("btn-restart").hidden = !live;
-  systemMessage(data.claude ? "" : "Claude Code was not found on this computer, so chat and summaries will not work. Install it and sign in once by running: claude");
+  systemMessage(data.claude ? (data.usage_paused ? "Paused to save usage: class chat summaries and date extraction are on hold until the cap period resets. Chat, Do it and the briefing still work." : "")
+    : "Claude Code was not found on this computer, so chat and summaries will not work. Install it and sign in once by running: claude");
+  $("btn-usage-resume").hidden = !data.usage_paused;
 
   renderConnections(data.connections || []);
   const c = data.counts || {};
@@ -473,6 +476,87 @@ $("chats-edit").addEventListener("click", () => { chatsEditing = true; loadChats
 let searchDebounce = null;
 $("chats-search").addEventListener("input", () => { clearTimeout(searchDebounce); searchDebounce = setTimeout(loadChatMessages, 250); });
 
+/* ---------- project tasks (who owes what; local edits only, nothing is posted anywhere) ---------- */
+let tasksState = null, tasksEditing = null, tasksTimer = null;
+async function taskCall(path, body) { const r = await api(path, "POST", body); if (!r.ok || !r.data || r.data.ok === false) notice((r.data && r.data.message) || "That did not work."); return r; }
+function taskRow(t) {
+  const closed = t.status !== "open";
+  const tags = [];
+  if (t.volunteered) tags.push(el("span", { class: "tk-tag" }, "volunteered"));
+  if (t.asked_by) tags.push(el("span", { class: "tk-tag" }, "asked by " + t.asked_by));
+  if (t.kind === "meeting") tags.push(el("span", { class: "tk-tag" }, "meeting"));
+  if (closed) tags.push(el("span", { class: "tk-tag" }, t.status));
+  const row = el("div", { class: "tk-row" + (closed ? " closed" : "") },
+    el("div", {}, el("div", { class: "tk-text" }, t.task, ...tags), el("div", { class: "tk-meta" }, (t.due ? "Due " + t.due : "No date") + (t.date_note ? " (" + t.date_note + ")" : ""))),
+    el("div", { class: "tk-actions" }));
+  const acts = row.querySelector(".tk-actions");
+  const btn = (label, fn, cls = "") => { const b = el("button", { class: "btn " + cls, type: "button" }, label); b.addEventListener("click", fn); acts.append(b); };
+  const setStatus = async (status) => { await taskCall("/api/tasks/status", { id: t.id, status }); loadTasks(); };
+  if (t.suggestion && !closed) {
+    const answer = async (action) => { await taskCall("/api/tasks/suggestion", { id: t.suggestion.id, action }); loadTasks(); };
+    const moved = t.suggestion.kind === "date";
+    btn((t.suggestion.by || "Someone") + " says " + (moved ? "moves to " + t.suggestion.new_due + ": Accept" : (t.suggestion.status === "done" ? "done" : "not needed") + ": Close"), () => answer(moved ? "accept" : "close"), "btn-primary");
+    btn("Keep", () => answer("keep"));
+  }
+  if (t.needs_confirm) btn(t.due ? "Add to my calendar" : "Mine", async () => { await taskCall("/api/tasks/confirm", { id: t.id }); loadTasks(); });
+  if (closed) btn("Reopen", () => setStatus("open"));
+  else { btn("Done", () => setStatus("done")); btn("Drop", () => setStatus("dropped"), "btn-quiet"); }
+  btn("Edit", () => { tasksEditing = tasksEditing === t.id ? null : t.id; renderTasks(); }, "btn-quiet");
+  if (t.source_quote) row.append(el("details", { class: "tk-quote" }, el("summary", {}, "From the chat"), el("blockquote", {}, t.source_quote)));
+  if (tasksEditing === t.id) {
+    const owner = el("input", { type: "text", placeholder: "Owner (blank = nobody yet)", maxlength: "60", value: t.owner_is_me ? "" : (t.owner || "") });
+    const me = el("input", { type: "checkbox" }); me.checked = t.owner_is_me;
+    const date = el("input", { type: "date", value: t.due_date || "" }), time = el("input", { type: "time", value: t.due_time || "" });
+    const save = el("button", { class: "btn btn-primary", type: "button" }, "Save");
+    save.addEventListener("click", async () => {
+      const r = await taskCall("/api/tasks/edit", { id: t.id, owner: me.checked && !owner.value.trim() ? "me" : owner.value, owner_is_me: me.checked, due_date: date.value, due_time: time.value });
+      if (r.data && r.data.ok) { tasksEditing = null; loadTasks(); }
+    });
+    row.append(el("div", { class: "tk-edit" }, owner, el("label", {}, me, " this is me"), date, time, save));
+  }
+  return row;
+}
+function renderTasks() {
+  const st = tasksState;
+  $("tasks-empty").hidden = st.has_project_groups; $("tasks-main").hidden = !st.has_project_groups;
+  if (!st.has_project_groups) return;
+  fill($("tasks-groups"), ...st.groups.map((g) => {
+    const open = g.tasks.filter((t) => t.status === "open"), closed = g.tasks.filter((t) => t.status !== "open");
+    const people = {};
+    for (const t of open) (people[t.kind === "meeting" ? "Group" : (t.owner_is_me ? "You" : (t.owner || "Nobody yet"))] ||= []).push(t);
+    const order = Object.keys(people).sort((a, b) => (a === "You" ? -1 : b === "You" ? 1 : a === "Nobody yet" ? 1 : b === "Nobody yet" ? -1 : a.localeCompare(b)));
+    return el("div", { class: "tk-group" }, el("h3", {}, g.label),
+      ...(order.length ? order.flatMap((who) => [el("div", { class: "tk-person" }, who), ...people[who].map(taskRow)]) : [el("p", { class: "muted" }, "Nothing open. New tasks appear within the hour after someone agrees to do something in the chat.")]),
+      ...(closed.length ? [el("div", { class: "tk-person" }, "Done or dropped (last 7 days)"), ...closed.map(taskRow)] : []),
+      ...(g.decisions.length ? [el("div", { class: "tk-person" }, "Decided (last 14 days)"), ...g.decisions.map((d) => el("div", { class: "tk-row" }, el("div", { class: "tk-text" }, d.text)))] : []));
+  }));
+  if (!$("tasks-aliases").dataset.ready) { renderAliases(st.aliases); $("tasks-aliases").dataset.ready = "1"; }
+}
+function aliasRow(a = "", p = "") {
+  const alias = el("input", { type: "text", placeholder: "Nickname in the chat", maxlength: "40", value: a });
+  const person = el("input", { type: "text", placeholder: "Who it is (or: me)", maxlength: "40", value: p });
+  const rm = el("button", { class: "btn btn-quiet", type: "button" }, "Remove");
+  const row = el("div", { class: "alias-row" }, alias, "is", person, rm);
+  rm.addEventListener("click", () => row.remove());
+  row._get = () => ({ alias: alias.value, person: person.value });
+  return row;
+}
+function renderAliases(list) { fill($("tasks-aliases"), ...list.map((x) => aliasRow(x.alias, x.person))); }
+$("alias-add").addEventListener("click", () => $("tasks-aliases").append(aliasRow()));
+$("alias-save").addEventListener("click", async () => {
+  const pairs = [...$("tasks-aliases").children].map((r) => r._get());
+  const r = await taskCall("/api/tasks/aliases", { aliases: pairs });
+  $("alias-note").textContent = r.data && r.data.ok ? "Saved." : "Could not save.";
+  if (r.data && r.data.ok) { renderAliases(r.data.aliases); loadTasks(); }
+});
+async function loadTasks() {
+  const { data } = await api("/api/tasks");
+  if (!data) return;
+  tasksState = data; renderTasks();
+  clearTimeout(tasksTimer);
+  if (currentView === "tasks") tasksTimer = setTimeout(() => { if (tasksEditing === null) loadTasks(); else tasksTimer = setTimeout(loadTasks, 15000); }, 15000);
+}
+
 /* ---------- calendar (read-only month view of Google Calendar) ---------- */
 const SGT_TODAY = () => new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Singapore" });
 const MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
@@ -586,6 +670,52 @@ async function loadUsage() {
 }
 $("usage-days").addEventListener("change", loadUsage);
 
+/* ---------- usage cap ---------- */
+let capLoaded = false;
+async function loadCap() {
+  const { data } = await api("/api/usage/cap");
+  if (!data) return;
+  const stat = (v, l) => el("div", { class: "stat" }, el("b", {}, v), el("span", {}, l));
+  const word = { daily: "today", weekly: "this week" };
+  const meters = ["daily", "weekly"].map((k) => {
+    const p = data.periods[k];
+    return stat("$" + p.used.toFixed(2) + (p.limit ? " / $" + p.limit.toFixed(2) + " (" + p.percent + "%)" : ""),
+      "Estimated " + word[k] + " - " + fmtNum(p.calls) + " runs, " + fmtNum(p.in_tokens) + " / " + fmtNum(p.out_tokens) + " tokens");
+  });
+  fill($("cap-meters"), ...meters);
+  const banner = $("cap-banner");
+  banner.hidden = !data.paused;
+  banner.textContent = data.paused ? "Paused to save usage: class chat summaries and date extraction are on hold." + (data.keep_group_replies ? "" : " Group replies are paused too.") : "";
+  $("cap-resume").hidden = !data.paused;
+  if (!capLoaded || document.activeElement.closest && !document.activeElement.closest(".cap-form")) {
+    $("cap-daily").value = data.daily || "";
+    $("cap-weekly").value = data.weekly || "";
+    $("cap-keep").checked = !!data.keep_group_replies;
+    fill($("cap-models"), ...data.jobs.map((j) => {
+      const sel = el("select", { "data-job": j.key },
+        ...(j.key === "chat" ? [el("option", { value: "" }, "default")] : []),
+        ...data.choices.map((c) => el("option", { value: c }, c)));
+      sel.value = data.models[j.key];
+      return el("label", {}, j.label, sel);
+    }));
+    capLoaded = true;
+  }
+}
+$("cap-save").addEventListener("click", async () => {
+  const models = {};
+  document.querySelectorAll("#cap-models select").forEach((s) => { models[s.dataset.job] = s.value; });
+  const { ok } = await api("/api/usage/cap", "POST", { daily: $("cap-daily").value, weekly: $("cap-weekly").value,
+    keep_group_replies: $("cap-keep").checked, models });
+  $("cap-msg").textContent = ok ? "Saved." : "Could not save.";
+  capLoaded = false; loadCap(); refreshState();
+});
+async function resumeUsage() {
+  await api("/api/usage/resume", "POST");
+  capLoaded = false; loadCap(); refreshState();
+}
+$("cap-resume").addEventListener("click", resumeUsage);
+$("btn-usage-resume").addEventListener("click", resumeUsage);
+
 /* ---------- logs ---------- */
 async function loadLogs() {
   const { data } = await api("/api/logs?n=300");
@@ -647,7 +777,7 @@ async function waitForRestart() {
     await new Promise((res) => setTimeout(res, 2000));
     try { const r = await fetch("/api/state"); if (r.ok) { location.reload(); return; } } catch (e) { /* still restarting */ }
   }
-  notice("The panel did not come back. Start it again with Open JARVIS.command.");
+  notice("The panel did not come back. Start it again with Open JARVIS.command (Mac) or Open JARVIS.bat (Windows).");
 }
 checkUpdate();
 setInterval(checkUpdate, 30 * 60 * 1000);
@@ -718,6 +848,7 @@ checkSetup();
 /* ---------- polling ---------- */
 refreshState(); loadFeed(); loadCalls();
 setInterval(refreshState, 3000);
+setInterval(() => { if (currentView === "usage") loadCap(); }, 10000);
 setInterval(() => { if (currentView === "overview") { loadFeed(); loadCalls(); } }, 60000);
 setInterval(() => { if (currentView === "logs") loadLogs(); if (currentView === "tools") loadTools(); }, 2000);
 setInterval(() => { if (currentView === "calendar" && Date.now() - calLoaded > 5 * 60 * 1000) loadCalendar(); }, 60000);

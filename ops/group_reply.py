@@ -16,8 +16,8 @@ import re
 import time
 from datetime import datetime, timedelta
 
-from core import groups, tg_group
-from core.deadlines import DeadlineStore, local_date
+from core import groups, tg_group, usagecap
+from core.deadlines import DeadlineStore, display_moment, local_date
 from core.library import Library
 from ops import claude_runner, persona
 from ops.textfmt import plain
@@ -61,6 +61,9 @@ class GroupReplier:
         """A new message arrived in a reply group (never your own, never a bot's). Bursts collapse: while one reply is being
         written, newer messages replace each other, so one answer covers the latest state of the conversation."""
         if self.ctx.db.get_setting("paused") == "1":
+            return
+        if usagecap.group_replies_paused(self.ctx):  # optional chatter is the first thing to stop when the cap is hit
+            self._status("paused", "paused to save usage")
             return
         self._latest[chat_id] = msg
         if chat_id in self._busy:
@@ -113,7 +116,7 @@ class GroupReplier:
         data = (f"=== CHAT (newest last) ===\n{chat}\n\n=== UPCOMING DEADLINES (next 14 days) ===\n{self._deadlines()}\n\n"
                 f"=== COURSE MATERIAL MATCHING THE NEWEST MESSAGE ===\n{self._material(msg.text)}\n")
         prompt = claude_runner.load_prompt("group_reply", group=groups.label_for(s, db, chat_id), **persona.fields(s))
-        return await self._run(prompt, data, model=MODEL, timeout=90)
+        return await self._run(prompt, data, model=usagecap.model_for(self.ctx.db, "group_reply") or MODEL, timeout=90)
 
     def _deadlines(self) -> str:
         s, now = self.ctx.settings, self.ctx.clock()
@@ -124,7 +127,7 @@ class GroupReplier:
         for d in rows[:25]:
             when = local_date(d, s.tz).strftime("%a %d %b")
             if not d.all_day:
-                when = datetime.fromisoformat(d.end_utc or d.start_utc).astimezone(s.tz).strftime("%a %d %b %H:%M")
+                when = datetime.fromisoformat(display_moment(d)).astimezone(s.tz).strftime("%a %d %b %H:%M")
             tag = "" if d.confidence == "confirmed" else " [tentative]"
             out.append(f"{when} - {d.course_code or ''}: {d.title}{tag}")
         return "\n".join(out)

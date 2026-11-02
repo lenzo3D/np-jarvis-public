@@ -2,6 +2,7 @@
 that each one really works.  Run from the panel (Logins & Tools > Connect everything).
 
     .venv/bin/python scripts/connect_all.py
+    (Windows: use .venv\\Scripts\\python.exe instead of .venv/bin/python)
 
 Sites that are already connected are only checked. A problem with one site never stops the others. Microsoft's
 sign-in number is printed here and also sent to you on Telegram. Nothing is posted or changed anywhere.

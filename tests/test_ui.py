@@ -299,9 +299,9 @@ def test_night_allows_the_hourly_check_and_never_logged_in_is_red(settings):
 
 def test_google_calendar_states(settings):
     assert conn_states(settings)["google"]["state"] == "unconfigured"
-    (settings.state_dir / "google_client.json").write_text("{}")
+    (settings.state_dir / "google_client.json").write_text("{}", encoding="utf-8")
     assert conn_states(settings)["google"]["action"] == "login_google"
-    (settings.state_dir / "google_token.json").write_text("{}")
+    (settings.state_dir / "google_token.json").write_text("{}", encoding="utf-8")
     assert conn_states(settings)["google"]["color"] == "green"
     db = DB(settings.db_path)
     db.init()
@@ -314,5 +314,43 @@ async def test_state_endpoint_includes_connections(settings):
     try:
         body = await (await c.get("/api/state", headers=H)).json()
         assert [x["id"] for x in body["connections"]] == ["brightspace", "teams", "google", "telegram", "outlook"]
+    finally:
+        await c.close()
+
+
+async def test_usage_cap_endpoints_save_pause_and_resume(settings):
+    from core import usagecap
+
+    db = seed(settings)
+    c = await client(settings, supervisor(settings))
+    try:
+        body = await (await c.get("/api/usage/cap", headers=H)).json()
+        assert not body["enabled"] and not body["paused"] and body["models"]["group_summary"] == "haiku"
+        r = await c.post("/api/usage/cap", headers=H, json={"daily": "1", "weekly": "", "keep_group_replies": True,
+                                                            "models": {"briefing": "haiku", "chat": "opus"}})
+        saved = await r.json()
+        assert saved["daily"] == 1.0 and saved["weekly"] is None and saved["keep_group_replies"]
+        assert saved["models"]["briefing"] == "haiku" and saved["models"]["chat"] == "opus"
+        db.record_usage(datetime.now(timezone.utc), "chat_web", "agent", None, True, 3.0, cost_usd=2.0)
+        state = await (await c.get("/api/state", headers=H)).json()
+        assert state["usage_paused"] is True
+        assert (await (await c.post("/api/usage/resume", headers=H)).json())["paused"] is False
+        assert (await (await c.get("/api/state", headers=H)).json())["usage_paused"] is False
+        assert usagecap.get_config(db)["daily"] == 1.0
+    finally:
+        await c.close()
+
+
+async def test_usage_cap_post_merges_and_rejects_bad_json(settings):
+    seed(settings)
+    c = await client(settings, supervisor(settings))
+    try:
+        await c.post("/api/usage/cap", headers=H, json={"daily": 2, "weekly": 6, "models": {"briefing": "haiku"}})
+        body = await (await c.post("/api/usage/cap", headers=H, json={"daily": 3})).json()
+        assert body["daily"] == 3.0 and body["weekly"] == 6.0 and body["models"]["briefing"] == "haiku"
+        r = await c.post("/api/usage/cap", headers={**H, "Content-Type": "application/json"}, data="{not json")
+        assert r.status == 400
+        r = await c.post("/api/usage/cap", headers=H, json=[1])
+        assert r.status == 400
     finally:
         await c.close()

@@ -10,20 +10,25 @@ import logging
 import re
 from datetime import datetime, timedelta, timezone
 
-from core.deadlines import SGT, Deadline, DeadlineStore, duplicates_confirmed, local_date, similar
+from core import usagecap
+from core.deadlines import SGT, Deadline, DeadlineStore, duplicates_confirmed, event_like, is_due, local_date, similar
 from ops.format import parse_iso
 
 log = logging.getLogger(__name__)
 LESSON_RE = re.compile(r"(?i)\b(lesson|lecture|class|clinic|consultation|session|lab|seminar|briefing)\b")
 DUE_RE = re.compile(r"(?i)\b(due|quiz|test|exam|homework|assignment|submit|submission|deadline|presentation|"
                     r"feedback|evaluation|assessment|ca\d?)\b")
-DEADLINE_KINDS = {"assignment", "homework", "other"}
+
+
+_KIND_RES = [(k, re.compile(rf"(?i)\b{pat}\b")) for k, pat in
+             (("exam", "exams?"), ("quiz", "quiz(?:zes)?"), ("test", "tests?"), ("presentation", "presentations?"),
+              ("homework", "homework"), ("assignment", "assignments?"))]
 
 
 def kind_from_title(title: str) -> str:
-    t = title.lower()
-    for k in ("exam", "quiz", "test", "presentation", "homework", "assignment"):
-        if k in t:
+    """Whole words only: "contest", "latest", "attest", "protest" are not tests and "examine" is not an exam."""
+    for k, rx in _KIND_RES:
+        if rx.search(title or ""):
             return k
     return "other"
 
@@ -35,11 +40,16 @@ def _iso(dt: datetime) -> str:
 STALE_AFTER = timedelta(hours=2)
 
 
-def confirmed_from_db(db, base: str) -> list[Deadline]:
-    """Assignments seen in the latest Brightspace sweeps. Items not seen for 2h+ (folder deleted/hidden) are skipped."""
+def fresh_cutoff(db) -> str:
+    """last_seen cutoff for assignments: older than the latest sweep by STALE_AFTER means gone (deleted/hidden)."""
     latest = db.conn.execute("select max(last_seen) from items where kind='assignment' and source='brightspace'"
                              ).fetchone()[0]
-    cutoff = (datetime.fromisoformat(latest) - STALE_AFTER).isoformat() if latest else ""
+    return (datetime.fromisoformat(latest) - STALE_AFTER).isoformat() if latest else ""
+
+
+def confirmed_from_db(db, base: str) -> list[Deadline]:
+    """Assignments seen in the latest Brightspace sweeps. Items not seen for 2h+ (folder deleted/hidden) are skipped."""
+    cutoff = fresh_cutoff(db)
     out = []
     for r in db.conn.execute("select * from items where kind='assignment' and last_seen>=?", (cutoff,)):
         p = json.loads(r["payload_json"])
@@ -64,7 +74,10 @@ def confirmed_from_calendar(events: list[dict], course_by_ou: dict[int, str],
         if not start:
             continue
         kind = kind_from_title(title)
-        if kind in DEADLINE_KINDS:
+        # a point in time, or a range over several days (an assessment window), is a due moment at its end; a named
+        # event or a same-day range is an event with its own start
+        as_event = event_like(kind, title, start, end)
+        if is_due(kind, as_event):
             due = end or start
             s_, e_ = due - timedelta(minutes=30), due
         else:
@@ -72,13 +85,25 @@ def confirmed_from_calendar(events: list[dict], course_by_ou: dict[int, str],
         d = Deadline(key=f"bs:cal:{e['CalendarEventId']}", title=title, course_code=course_by_ou.get(e.get("OrgUnitId")),
                      kind=kind, start_utc=_iso(s_), end_utc=_iso(e_) if e_ else None,
                      all_day=bool(e.get("IsAllDayEvent")), source="brightspace", source_ref="",
-                     confidence="confirmed", quote="")
+                     confidence="confirmed", quote="", as_event=kind == "other" and as_event)
         if d.all_day:
             d.start_utc, d.end_utc = start.astimezone(SGT).date().isoformat(), None
         if duplicates_confirmed(d, assignments):
             continue
         out.append(d)
     return out
+
+
+def _keep_stored_shape(store: DeadlineStore, d: Deadline) -> None:
+    """A row stored as a due block (as_event=0) keeps that shape, so the upgrade that introduced as_event does not
+    rewrite an existing same-day range into a long event block (no hash change, no calendar PATCH)."""
+    if not d.as_event or d.all_day:
+        return
+    cur = store.get(d.key)
+    if cur is None or cur.as_event:
+        return
+    due = parse_iso(d.end_utc) or parse_iso(d.start_utc)
+    d.start_utc, d.end_utc, d.as_event = _iso(due - timedelta(minutes=30)), _iso(due), False
 
 
 async def refresh_confirmed(ctx) -> int:
@@ -95,6 +120,8 @@ async def refresh_confirmed(ctx) -> int:
         events = None
     found = assignments + (confirmed_from_calendar(events, {c.ou: c.code for c in courses}, assignments)
                            if events is not None else [])
+    for d in found:
+        _keep_stored_shape(store, d)
     changed = sum(store.upsert(d, now) for d in found)
     seen = {d.key for d in found}
     today = now.astimezone(ctx.settings.tz).date()
@@ -164,6 +191,9 @@ def parse_extraction(raw: str, sources: dict[str, tuple[str | None, str]], now: 
             continue
         kind = it.get("kind") if it.get("kind") in KINDS else "other"
         course = it.get("course") if it.get("course") in known else src_course
+        as_event = t is not None and event_like(
+            kind, title, datetime(day.year, day.month, day.day, *t, tzinfo=tz),
+            datetime(day.year, day.month, day.day, *t_end, tzinfo=tz) if t_end else None, tz)
         if t is None:
             start, end, all_day = day.isoformat(), None, True
         else:
@@ -171,7 +201,7 @@ def parse_extraction(raw: str, sources: dict[str, tuple[str | None, str]], now: 
             if t_end:
                 e_local = datetime(day.year, day.month, day.day, *t_end, tzinfo=tz)
                 start, end = _iso(s_local), _iso(e_local) if e_local > s_local else None
-            elif kind in DEADLINE_KINDS:
+            elif is_due(kind, as_event):
                 start, end = _iso(s_local - timedelta(minutes=30)), _iso(s_local)
             else:
                 start, end = _iso(s_local), None
@@ -179,8 +209,37 @@ def parse_extraction(raw: str, sources: dict[str, tuple[str | None, str]], now: 
         out.append(Deadline(key=extracted_key(course, kind, title, day.isoformat()), title=title,
                             course_code=course, kind=kind, start_utc=start, end_utc=end, all_day=all_day,
                             source=SOURCE_OF_KIND.get(src_kind, src_kind), source_ref=str(it.get("source") or ""),
-                            confidence="tentative", quote=str(it.get("quote") or "")[:200]))
+                            confidence="tentative", quote=str(it.get("quote") or "")[:200], as_event=as_event))
     return out
+
+
+_MONTHS = r"jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?"
+_DAYS = r"mon(?:day)?|tue(?:s(?:day)?)?|wed(?:nesday)?|thu(?:r(?:s(?:day)?)?)?|fri(?:day)?|sat(?:urday)?|sun(?:day)?"
+# a chat line that could carry a date or a deadline; everything else ("lol", "ok thanks") never needs Claude
+DATEY_RE = re.compile(
+    rf"(?i)\b\d{{1,2}}[/.-]\d{{1,2}}(?:[/.-]\d{{2,4}})?\b|\b\d{{1,2}}(?:st|nd|rd|th)?\s*(?:{_MONTHS})\b|\b(?:{_MONTHS})\s*\d{{1,2}}\b|"
+    rf"\b(?:{_DAYS})\b|\b(?:tmr|tmrw|tomorrow|tonight|next\s+(?:week|mon|tue|wed|thu|fri|sat|sun)|this\s+(?:week|fri|sat|sun)|"
+    r"end of (?:the )?week|eod)\b|"
+    r"\b\d{1,2}(?::\d{2})?\s*(?:am|pm)\b|\b\d{1,2}:\d{2}\b|\b\d{3,4}\s*(?:hrs?|h)\b|"
+    r"\b(?:due|deadline|submit\w*|quiz|test|exam|presentation|assignment|week\s*\d+|wk\s*\d+|mst|ca\d|recess|noon|midnight|"
+    r"hand(?:ing)?[\s-]*in|report|brief|esok|lusa|minggu|hari\s+ini|today)\b|"
+    r"\b[0-2]\d[0-5]\d\b|"  # 24h times such as 2359 or 0900
+    rf"\b(?:\d+|an?|one|two|three|four|five|six|seven|eight|nine|ten|few|couple)\s*(?:weeks?|wks?|days?)\b|"
+    r"[^\x00-\u024f]")  # any non-Latin script (Chinese etc.): not judged, always sent
+SMALL_BATCH_CHARS = 4000  # a batch this small is cheap, so it is sent whole rather than risk dropping a deadline
+
+
+def datey_lines(lines: list, context: int = 1, key=lambda x: x, min_chars: int = 0) -> list:
+    """Keep only the lines that look date-like, plus `context` neighbours each side (the line before often names the
+    subject: "the quiz?" / "friday 3pm"). Order is preserved. `key` picks the text to test, so a timestamp prefix
+    (which always looks like a date) is not what gets matched."""
+    if sum(len(key(x)) for x in lines) < min_chars:
+        return list(lines)
+    keep: set[int] = set()
+    for i, line in enumerate(lines):
+        if DATEY_RE.search(key(line)):
+            keep.update(range(max(0, i - context), min(len(lines), i + context + 1)))
+    return [lines[i] for i in sorted(keep)]
 
 
 def _worth_extracting(m: dict) -> bool:
@@ -204,13 +263,39 @@ async def _course_names(ctx) -> dict[str, str]:
     return names or ctx.db.get_json_setting("course_names", {})
 
 
+def week_table(start: str, recess_week: int | None = None, weeks: int = 18) -> list[tuple[str, _date]]:
+    """[(label, Monday)] for teaching weeks 1..weeks, with the recess week (if any) as its own row after week
+    `recess_week`; every later teaching week is one week further on."""
+    first = _date.fromisoformat(start)
+    rows, offset = [], 0
+    for n in range(1, weeks + 1):
+        rows.append((f"Week {n}", first + timedelta(days=7 * (n - 1 + offset))))
+        if recess_week and n == recess_week:
+            offset = 1
+            rows.append(("Recess week", first + timedelta(days=7 * n)))
+    return rows
+
+
+def semester_text(start: str | None, recess_week: int | None = None) -> str:
+    """The semester facts given to the extraction prompt: a ready table of Monday dates (recess already applied), so
+    the model looks the date up instead of doing the arithmetic."""
+    try:
+        rows = week_table(start, recess_week) if start else None
+    except ValueError:
+        rows = None
+    if not rows:
+        return "No semester start date is known: skip dates given only as a week number."
+    table = "; ".join(f"{label}: Monday {d.isoformat()}" for label, d in rows)
+    note = " The recess week is a real week with its own dates." if recess_week else ""
+    return (f"Semester week table (the Monday of each week, use these exact dates for 'Week N' or 'recess week'; "
+            f"weeks not in the table: skip).{note} {table}.")
+
+
 def _prompt(ctx, names: dict[str, str]) -> str:
     from ops import claude_runner
 
     tz = ctx.settings.tz
-    start = getattr(ctx.settings, "semester_start", None)
-    sem = (f"Semester week 1 starts on Monday {start}." if start
-           else "No semester start date is known: skip dates given only as a week number.")
+    sem = semester_text(getattr(ctx.settings, "semester_start", None), getattr(ctx.settings, "recess_week", None))
     return claude_runner.load_prompt("extract_deadlines", today=ctx.clock().astimezone(tz).date().isoformat(),
                                      semester=sem, courses="\n".join(f"- {c}: {n}" for c, n in names.items()))
 
@@ -224,14 +309,17 @@ def _json_ok(raw: str) -> bool:
 
 
 async def _run_blocks(ctx, blocks: list[tuple[str, str, str | None, str]],
-                      names: dict[str, str]) -> tuple[int, set[str]]:
-    """blocks: (source_id, kind, course, text). Returns (#new tentative deadlines, source ids handled OK)."""
+                      names: dict[str, str], job: str = "extract_docs") -> tuple[int, set[str]]:
+    """blocks: (source_id, kind, course, text). Returns (#new tentative deadlines, source ids handled OK).
+    `job` picks the model setting. While the usage cap has the jobs paused nothing runs and nothing is reported as
+    handled, so library items stay pending and the chat window does not advance: it all resumes after the reset."""
     from ops import claude_runner
     from ops.deadline_jobs import get_gcal
     from ops.gcal_events import short_course
 
-    if not blocks:
+    if not blocks or usagecap.paused(ctx):
         return 0, set()
+    model = usagecap.model_for(ctx.db, job)
     run_text = ctx.extra.get("run_text") or claude_runner.run_text
     sources = {sid: (course, kind) for sid, kind, course, _ in blocks}
     chunks: list[tuple[str, list[str]]] = []
@@ -251,7 +339,7 @@ async def _run_blocks(ctx, blocks: list[tuple[str, str, str | None, str]],
     for chunk, chunk_ids in chunks:
         try:
             with claude_runner.labelled("extract_dates"):
-                raw = await run_text(prompt, chunk, run_as=ctx.settings.claude_run_as)
+                raw = await run_text(prompt, chunk, model=model, run_as=ctx.settings.claude_run_as)
         except claude_runner.ClaudeError as e:
             log.warning("deadline extraction failed (will retry): %s", e)
             continue
@@ -307,23 +395,30 @@ async def extract_chats(ctx) -> int:
     cfg = groups.configured(ctx.settings, ctx.db) or [{"id": None, "label": "class group", "kind": "class"}]
     for g in cfg:
         msgs = tg_group.messages_since(ctx.db, g["id"], since)
-        for i in range(0, len(msgs), 200):  # split instead of truncating, so recent messages are never dropped
-            lines = [f"[{m.ts.astimezone(tz):%a %d %b %H:%M}] {m.sender}: {m.text}" for m in msgs[i:i + 200]]
+        pairs = datey_lines([(f"[{m.ts.astimezone(tz):%a %d %b %H:%M}] {m.sender}: {m.text}", m.text) for m in msgs],
+                            key=lambda p: p[1], min_chars=SMALL_BATCH_CHARS)
+        all_lines = [line for line, _ in pairs]
+        for i in range(0, len(all_lines), 200):  # split instead of truncating, so recent messages are never dropped
+            lines = all_lines[i:i + 200]
             sid = f"group{i // 200 or ''}" if g["id"] is None else f"group{g['id']}:{i // 200}"
             blocks.append((sid, "group", None, f"Telegram {g['kind']} group: {g['label']}\n" + "\n".join(lines)))
-    by_conv: dict[str, list[str]] = {}
+    by_conv: dict[str, list[tuple[str, str]]] = {}
     for r in ctx.db.conn.execute("select payload_json from items where source='teams' and first_seen>=?",
                                  (since.isoformat(),)):
         p = json.loads(r["payload_json"])
         ts = parse_iso(p.get("ts"))
         stamp = ts.astimezone(tz).strftime("%a %d %b %H:%M") if ts else ""
-        by_conv.setdefault(p.get("chat_name") or "Teams", []).append(f"[{stamp}] {p.get('sender')}: {p.get('body_text')}")
+        by_conv.setdefault(p.get("chat_name") or "Teams", []).append(
+            (f"[{stamp}] {p.get('sender')}: {p.get('body_text')}", str(p.get("body_text") or "")))
     for name, lines in by_conv.items():
+        lines = [line for line, _ in datey_lines(lines, key=lambda p: p[1], min_chars=SMALL_BATCH_CHARS)]
+        if not lines:
+            continue
         blocks.append((f"teams:{name}"[:80], "teams", None, f"Teams: {name}\n" + "\n".join(lines)))
     if not blocks:
         ctx.db.set_setting("last_chat_extract", now.isoformat())
         return 0
-    new, ok = await _run_blocks(ctx, blocks, await _course_names(ctx))
+    new, ok = await _run_blocks(ctx, blocks, await _course_names(ctx), job="extract_chats")
     if ok >= {sid for sid, *_ in blocks}:
         ctx.db.set_setting("last_chat_extract", now.isoformat())
     return new

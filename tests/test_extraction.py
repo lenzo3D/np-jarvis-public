@@ -120,3 +120,24 @@ async def test_extract_chats_uses_group_and_teams_since_last_run(db, env_file):
     assert "meet thu 2pm at library" in s.extra["calls"][0][1]
     await extract_chats(s)
     assert len(s.extra["calls"]) == 1  # nothing new since last run
+
+
+def test_semester_text_is_a_precomputed_week_table_with_the_recess_week_as_its_own_row():
+    from ops.deadline_sources import semester_text, week_table
+    assert "skip dates given only as a week number" in semester_text(None, 7)
+    assert "skip dates given only as a week number" in semester_text("not-a-date", 7)
+    plain = semester_text("2026-10-19")
+    assert "Week 1: Monday 2026-10-19" in plain and "Week 2: Monday 2026-10-26" in plain and "Recess" not in plain
+    assert "Week 18: Monday 2027-02-15" in plain
+    t = semester_text("2026-10-19", 7)
+    assert "Week 7: Monday 2026-11-30" in t
+    assert "Recess week: Monday 2026-12-07" in t
+    assert "Week 8: Monday 2026-12-14" in t and "Week 18: Monday 2027-02-22" in t
+    assert [l for l, _ in week_table("2026-10-19", 7)][6:9] == ["Week 7", "Recess week", "Week 8"]
+
+
+def test_recess_week_setting_parses_and_ignores_junk(tmp_path):
+    from core.config import _recess_week
+    assert _recess_week("7") == 7 and _recess_week(" 8 ") == 8
+    assert _recess_week(None) is None and _recess_week("") is None and _recess_week("x") is None
+    assert _recess_week("0") is None and _recess_week("99") is None

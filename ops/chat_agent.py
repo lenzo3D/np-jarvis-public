@@ -9,14 +9,13 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import os
-import signal
 import sys
 import time
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import AsyncIterator
 
+from core import hostos, localapi, usagecap
 from ops import claude_runner, persona
 from ops.claude_runner import ClaudeError, _base_cmd
 
@@ -27,24 +26,33 @@ AGENT_TIMEOUT = 30 * 60
 EDIT_EVERY = 10.0
 
 
-def _mcp_config_json(settings) -> str:
+def _mcp_config_json(settings, windows: bool | None = None) -> str:
+    env = {"OPS_SOCKET": str(settings.ops_socket), "PYTHONPATH": str(REPO)}
+    if hostos.api_transport(settings.ops_api_transport, windows) == "tcp":  # the MCP server reads the port and token from this file
+        env["OPS_ENDPOINT"] = str(localapi.endpoint_path(settings))
+        env["PYTHONUTF8"] = "1"
     return json.dumps({"mcpServers": {"school": {
-        "command": sys.executable, "args": ["-m", "school_mcp.server"], "cwd": str(REPO),
-        "env": {"OPS_SOCKET": str(settings.ops_socket), "PYTHONPATH": str(REPO)}}}})
+        "command": sys.executable, "args": ["-m", "school_mcp.server"], "cwd": str(REPO), "env": env}}})
 
 
 def build_agent_command(prompt: str, settings, session_id: str | None) -> list[str]:
-    ws, skills = settings.workspace_dir, Path.home() / ".claude" / "skills"
+    ws, skills = hostos.rule_path(settings.workspace_dir), hostos.rule_path(Path.home() / ".claude" / "skills")
+    repo, state = hostos.rule_path(REPO), hostos.rule_path(settings.state_dir)
     allowed = ["mcp__school", f"Read({ws}/**)", f"Write({ws}/**)", f"Edit({ws}/**)", f"Read({skills}/**)",
                "Glob", "Grep", "Skill", "Bash(python3:*)", "Bash(soffice:*)", "Bash(pandoc:*)", "Bash(ls:*)",
                "Bash(mkdir:*)", "Bash(cp:*)", "Bash(mv:*)", "WebSearch", "WebFetch"]
-    denied = ["Bash(sudo:*)", "Bash(curl:*)", f"Read({settings.state_dir}/**)", f"Read({REPO}/secrets.env)",
-              f"Edit({REPO}/core/**)", f"Edit({REPO}/ops/**)", f"Edit({REPO}/school_mcp/**)"]
+    if hostos.is_windows():  # there is no python3 on Windows; the Python launcher and python.exe are the equivalents
+        allowed += ["Bash(python:*)", "Bash(py:*)"]
+    denied = ["Bash(sudo:*)", "Bash(curl:*)", f"Read({state}/**)", f"Read({repo}/secrets.env)",
+              f"Edit({repo}/core/**)", f"Edit({repo}/ops/**)", f"Edit({repo}/school_mcp/**)"]
     cmd = _base_cmd(settings.claude_run_as) + [
         "-p", prompt, "--output-format", "stream-json", "--verbose",
         "--append-system-prompt", persona.rules(settings),
         "--strict-mcp-config", "--mcp-config", _mcp_config_json(settings),
         "--allowedTools", ",".join(allowed), "--disallowedTools", ",".join(denied)]
+    model = usagecap.chat_model(settings)  # panel setting; empty means Claude Code's own default
+    if model:
+        cmd += ["--model", model]
     if session_id:
         cmd += ["--resume", session_id]
     return cmd
@@ -54,7 +62,7 @@ async def stream_claude(s, prompt: str, session_id: str | None) -> AsyncIterator
     """Run the JARVIS agent once. Yields ('session', id), ('text', block)... and finally ('result', text)."""
     proc = await asyncio.create_subprocess_exec(
         *build_agent_command(prompt, s, session_id), cwd=str(s.workspace_dir), stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE, limit=16 * 1024 * 1024, start_new_session=True)
+        stderr=asyncio.subprocess.PIPE, limit=16 * 1024 * 1024, **hostos.new_group_kwargs())
     stderr_task = asyncio.create_task(proc.stderr.read())
     loop = asyncio.get_running_loop()
     deadline = loop.time() + AGENT_TIMEOUT
@@ -88,10 +96,7 @@ async def stream_claude(s, prompt: str, session_id: str | None) -> AsyncIterator
     finally:
         claude_runner.record_usage(kind="agent", model=None, ok=ok, seconds=time.monotonic() - started, **usage)
         if proc.returncode is None:
-            try:
-                os.killpg(proc.pid, signal.SIGKILL)
-            except ProcessLookupError:
-                pass
+            hostos.terminate_tree(proc.pid, force=True)
             await proc.wait()
         stderr_task.cancel()
 

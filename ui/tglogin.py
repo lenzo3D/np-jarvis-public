@@ -41,7 +41,7 @@ class TelegramLogin:
         path = telethon_main.login_lock_path(self.settings)
         if on:
             path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(str(time.time()))
+            path.write_text(str(time.time()), encoding="utf-8")
         else:
             path.unlink(missing_ok=True)
 

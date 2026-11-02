@@ -26,7 +26,7 @@ def settings(env_file):
 
 
 def logged_in(settings):
-    (settings.state_dir / "sessions" / "outlook.cookies.json").write_text("[]")
+    (settings.state_dir / "sessions" / "outlook.cookies.json").write_text("[]", encoding="utf-8")
 
 
 def m(i, subject, read=False, minutes=10, cat="normal", **kw):

@@ -71,13 +71,13 @@ def test_semester_start_reminder_in_briefing_facts():
     tmp = pathlib.Path(tempfile.mkdtemp())
     env = tmp / "s.env"
     env.write_text("ALLOWED_TELEGRAM_ID=1\nOPS_BOT_TOKEN=t\nPOLITEMALL_BASE=https://x\nPOLITEMALL_USER=u\n"
-                   f"POLITEMALL_PASS=p\nSTATE_DIR={tmp}/state\nWORKSPACE_DIR={tmp}/ws\n")
+                   f"POLITEMALL_PASS=p\nSTATE_DIR={tmp}/state\nWORKSPACE_DIR={tmp}/ws\n", encoding="utf-8")
     db = DB(tmp / "t.db"); db.init()
     s = Services(settings=load_settings(env), db=db, sessions=None, bs=FakeBS(), notifier=FakeNotifier(),
                  clock=Clock())
     text = asyncio.run(build_briefing_input(s, datetime(2026, 10, 27, 23, 0, tzinfo=timezone.utc)))
     assert "SEMESTER_START" in text
-    env.write_text(env.read_text() + "SEMESTER_START=2026-10-19\n")
+    env.write_text(env.read_text(encoding="utf-8") + "SEMESTER_START=2026-10-19\n", encoding="utf-8")
     s.settings = load_settings(env)
     text = asyncio.run(build_briefing_input(s, datetime(2026, 10, 27, 23, 0, tzinfo=timezone.utc)))
     assert "SEMESTER_START" not in text

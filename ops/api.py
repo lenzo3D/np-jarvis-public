@@ -1,10 +1,13 @@
-"""Local HTTP API on a Unix socket, used by school_mcp (which runs as the Claude user).
+"""Local HTTP API used by school_mcp (which runs as the Claude user): a Unix socket on macOS/Linux, or
+127.0.0.1 with a random bearer token on Windows (see core/localapi.py).
 
-Read endpoints + propose_action + send_file only. There is deliberately NO approve or
-execute route: approval happens only through the Ops bot buttons.
+Read endpoints + propose_action + send_file, plus one local-only write: marking a project-group task done/dropped
+(/project/tasks/status), which changes only JARVIS's own list and sends nothing anywhere. There is deliberately NO
+approve or execute route: approval happens only through the Ops bot buttons.
 """
 from __future__ import annotations
 
+import hmac
 import json
 import logging
 import os
@@ -14,7 +17,7 @@ from pathlib import Path
 
 from aiohttp import web
 
-from core import safefs
+from core import hostos, localapi, safefs
 from core.auth import AuthRequired
 from core.models import Course
 from ops.format import fmt_dt, parse_iso
@@ -45,6 +48,30 @@ def find_course(courses: list[Course], q: str) -> list[Course]:
         if all(any(w.startswith(t) or t in w for w in words) for t in toks):
             out.append(c)
     return out
+
+
+def _bad(msg: str, **extra) -> web.HTTPBadRequest:
+    return web.HTTPBadRequest(text=json.dumps({"error": msg, **extra}), content_type="application/json")
+
+
+def _num(raw, name: str, default=None, cast=int, lo=None, hi=None):
+    """A number parameter from the query string, a JSON body or the path. Anything that is not a plain finite
+    number (or is outside lo..hi) is a 400 with a clear message, never a server error."""
+    if raw is None or raw == "":
+        if default is None:
+            raise _bad(f"{name} is required (a number)")
+        return default
+    try:
+        if isinstance(raw, bool):
+            raise ValueError
+        v = cast(raw)
+    except (TypeError, ValueError, OverflowError):
+        raise _bad(f"{name} must be a {'whole number' if cast is int else 'number'}", got=str(raw)[:40])
+    if v != v or v in (float("inf"), float("-inf")):
+        raise _bad(f"{name} must be a finite number", got=str(raw)[:40])
+    if (lo is not None and v < lo) or (hi is not None and v > hi):
+        raise _bad(f"{name} must be between {lo} and {hi}", got=str(raw)[:40])
+    return v
 
 
 def _safe(name: str) -> str:
@@ -107,7 +134,7 @@ class Api:
     async def post_download(self, req):
         body = await req.json()
         c = await self.course(body.get("course", ""))
-        name, data = await self.s.bs.fetch_file(c.ou, int(body["topic_id"]))
+        name, data = await self.s.bs.fetch_file(c.ou, _num(body.get("topic_id"), "topic_id", lo=0, hi=2**53))
         path = safefs.write_file(self.s.settings.workspace_dir,
                                  [_safe(c.code), _safe(str(body.get("folder") or "downloads"))], _safe(name), data)
         return web.json_response({"path": str(path), "bytes": len(data)})
@@ -126,7 +153,7 @@ class Api:
         return web.json_response(out)
 
     async def get_due(self, req):
-        days = int(req.query.get("days", "7"))
+        days = _num(req.query.get("days"), "days", 7, lo=0, hi=3650)
         now = self.s.clock()
         due, nodue = [], []
         for d in self.s.db.conn.execute("select * from due_dates"):
@@ -161,7 +188,7 @@ class Api:
         return web.json_response(out)
 
     async def get_calendar(self, req):
-        events = await self.s.bs.calendar_range_days(int(req.query.get("days", "7")))
+        events = await self.s.bs.calendar_range_days(_num(req.query.get("days"), "days", 7, lo=0, hi=3650))
         tz = self.s.settings.tz
         return web.json_response([{
             "title": U(e.get("Title")), "start_sgt": fmt_dt(parse_iso(e["StartDateTime"]), tz) if e.get("StartDateTime") else None,
@@ -178,9 +205,12 @@ class Api:
                                    "conv_id": i.payload.get("conv_id"), "ts": i.payload.get("ts")} for i in items])
 
     async def get_teams_read(self, req):
+        limit = _num(req.query.get("limit"), "limit", 30, lo=1, hi=500)
+        if not req.query.get("id"):
+            raise _bad("id is required")
         if not self.s.teams:
             raise web.HTTPServiceUnavailable(text="Teams not configured")
-        msgs = await self.s.teams.read(req.query["id"], int(req.query.get("limit", "30")))
+        msgs = await self.s.teams.read(req.query["id"], limit)
         return web.json_response([{"sender": U(m.get("sender")), "text": U(m.get("text")), "ts": m.get("ts")}
                                   for m in msgs])
 
@@ -209,14 +239,14 @@ class Api:
     async def get_group_search(self, req):
         from core import tg_group
 
-        msgs = tg_group.search(self.s.db, req.query.get("q", ""), int(req.query.get("limit", "20")),
+        msgs = tg_group.search(self.s.db, req.query.get("q", ""), _num(req.query.get("limit"), "limit", 20, lo=1, hi=500),
                                self._group_filter(req))
         return web.json_response([self._gm(m) for m in msgs])
 
     async def get_group_recent(self, req):
         from core import tg_group
 
-        since = self.s.clock() - timedelta(hours=int(req.query.get("hours", "24")))
+        since = self.s.clock() - timedelta(hours=_num(req.query.get("hours"), "hours", 24, lo=0, hi=24 * 365))
         msgs = tg_group.messages_since(self.s.db, self._group_filter(req), since)
         return web.json_response([self._gm(m) for m in msgs])
 
@@ -224,6 +254,46 @@ class Api:
         from core import groups
 
         return {**_gm(m, self.s.settings.tz), "group": groups.label_for(self.s.settings, self.s.db, m.chat_id)}
+
+    # ---------- project group tasks (text comes from the group chat, so it is third-party content) ----------
+    @staticmethod
+    def _task_out(t: dict) -> dict:
+        return {**t, "task": U(t["task"]), "owner": U(t["owner"]) if t["owner"] else None,
+                "source_quote": U(t["source_quote"]) if t["source_quote"] else None}
+
+    async def get_project_tasks(self, req):
+        from ops import project_tasks
+
+        ref = req.query.get("group") or None
+        known = project_tasks.pt.project_groups(self.s.settings, self.s.db)
+        if ref and not any(project_tasks.group_matches(g, ref) for g in known):
+            raise web.HTTPBadRequest(text=json.dumps({"error": "unknown project group", "groups": [g["label"] for g in known]}),
+                                     content_type="application/json")
+        rows = project_tasks.listing(self.s.settings, self.s.db, self.s.clock(), ref, req.query.get("mine") == "1")
+        return web.json_response([self._task_out(t) for t in rows])
+
+    async def post_project_task_status(self, req):
+        from core import project_tasks as pt
+
+        try:
+            body = await req.json()
+        except ValueError:
+            body = None
+        if not isinstance(body, dict):
+            raise web.HTTPBadRequest(text=json.dumps({"error": "a JSON object is required"}), content_type="application/json")
+        try:
+            task_id, status = int(body.get("id")), str(body.get("status"))
+        except (TypeError, ValueError):
+            raise web.HTTPBadRequest(text=json.dumps({"error": "id and status are required"}), content_type="application/json")
+        task = pt.TaskStore(self.s.db).get(task_id)
+        project_ids = {g["id"] for g in pt.project_groups(self.s.settings, self.s.db)}
+        if status not in pt.STATUSES or task is None or task.chat_id not in project_ids:
+            raise web.HTTPBadRequest(text=json.dumps({"error": "unknown task or status", "statuses": list(pt.STATUSES)}),
+                                     content_type="application/json")
+        now = self.s.clock()
+        pt.TaskStore(self.s.db).set_status(task_id, status, now)
+        pt.sync_deadlines(self.s.settings, self.s.db, now)  # same calendar refresh as the panel
+        return web.json_response({"id": task_id, "status": status})
 
     # ---------- school email (read-only; text is third-party content) ----------
     def _mail_json(self, m: dict, body: bool = False) -> dict:
@@ -245,15 +315,15 @@ class Api:
     async def get_mail_recent(self, req):
         from core.mail import MailStore
 
-        since = self.s.clock() - timedelta(hours=int(req.query.get("hours", "48")))
-        rows = MailStore(self.s.db).recent(int(req.query.get("limit", "15")), since, req.query.get("unread") == "1",
+        since = self.s.clock() - timedelta(hours=_num(req.query.get("hours"), "hours", 48, lo=0, hi=24 * 365))
+        rows = MailStore(self.s.db).recent(_num(req.query.get("limit"), "limit", 15, lo=1, hi=500), since, req.query.get("unread") == "1",
                                            req.query.get("category"))
         return web.json_response([self._mail_json(m) for m in rows])
 
     async def get_mail_search(self, req):
         from core.mail import MailStore
 
-        rows = MailStore(self.s.db).search(req.query.get("q", ""), int(req.query.get("limit", "10")))
+        rows = MailStore(self.s.db).search(req.query.get("q", ""), _num(req.query.get("limit"), "limit", 10, lo=1, hi=500))
         return web.json_response([self._mail_json(m) for m in rows])
 
     async def get_mail(self, req):
@@ -265,18 +335,18 @@ class Api:
         return web.json_response(self._mail_json(m, body=True))
 
     async def get_deadlines(self, req):
-        from core.deadlines import DeadlineStore, local_date
+        from core.deadlines import DeadlineStore, display_moment, local_date
 
         tz = self.s.settings.tz
         course = (await self.course(req.query["course"])).code if req.query.get("course") else None
         out = []
-        for d in DeadlineStore(self.s.db).upcoming(self.s.clock(), int(req.query.get("days", "60")), tz):
+        for d in DeadlineStore(self.s.db).upcoming(self.s.clock(), _num(req.query.get("days"), "days", 60, lo=0, hi=3650), tz):
             if course and d.course_code != course:
                 continue
             if d.all_day:
                 when = local_date(d, tz).strftime("%a %d %b")
             else:
-                when = fmt_dt(parse_iso(d.end_utc or d.start_utc), tz)
+                when = fmt_dt(parse_iso(display_moment(d)), tz)
             out.append({"key": d.key, "title": U(d.title), "course": d.course_code, "kind": d.kind,
                         "when_sgt": when, "all_day": d.all_day, "confidence": d.confidence, "source": d.source,
                         "quote": U(d.quote) if d.quote else None, "link": d.source_ref or None})
@@ -286,7 +356,7 @@ class Api:
         from core.library import Library
 
         course = (await self.course(req.query["course"])).code if req.query.get("course") else None
-        hits = Library(self.s.db).search(req.query.get("q", ""), course, int(req.query.get("limit", "10")))
+        hits = Library(self.s.db).search(req.query.get("q", ""), course, _num(req.query.get("limit"), "limit", 10, lo=1, hi=500))
         return web.json_response([{**{k: h[k] for k in ("key", "course_code", "kind", "module")},
                                    "title": U(h["title"]), "snippet": U(h["snippet"])} for h in hits])
 
@@ -319,7 +389,7 @@ class Api:
         handler = self.s.extra.get("action_status")
         if not handler:
             raise web.HTTPNotImplemented(text="actions not available")
-        return web.json_response(await handler(int(req.match_info["id"])))
+        return web.json_response(await handler(_num(req.match_info.get("id"), "id", lo=0, hi=2**53)))
 
     async def post_send_file(self, req):
         body = await req.json()
@@ -343,6 +413,8 @@ async def _errors(request, handler):
         return await handler(request)
     except web.HTTPException:
         raise
+    except json.JSONDecodeError:
+        return web.json_response({"error": "the request body must be valid JSON"}, status=400)
     except safefs.UnsafePath as e:
         return web.json_response({"error": "unsafe path", "detail": str(e)}, status=400)
     except AuthRequired as e:
@@ -353,10 +425,28 @@ async def _errors(request, handler):
         return web.json_response({"error": type(e).__name__, "detail": str(e)[:300]}, status=500)
 
 
-def make_app(services) -> web.Application:
+def _bearer(token: str):
+    """Reject any request that does not carry the per-start token (tcp transport only)."""
+    want = f"Bearer {token}".encode()
+
+    @web.middleware
+    async def check(request, handler):
+        if not hmac.compare_digest(request.headers.get("Authorization", "").encode(), want):
+            return web.json_response({"error": "unauthorized"}, status=401)
+        return await handler(request)
+
+    return check
+
+
+async def _health(_req):
+    return web.json_response({"ok": True})
+
+
+def make_app(services, token: str | None = None) -> web.Application:
     api = Api(services)
-    app = web.Application(middlewares=[_errors])
+    app = web.Application(middlewares=[_bearer(token), _errors] if token else [_errors])
     r = app.router
+    r.add_get("/health", _health)
     r.add_get("/courses", api.get_courses)
     r.add_get("/courses/find", api.get_find)
     r.add_get("/content", api.get_content)
@@ -375,6 +465,8 @@ def make_app(services) -> web.Application:
     r.add_get("/group/chats", api.get_group_chats)
     r.add_get("/group/search", api.get_group_search)
     r.add_get("/group/recent", api.get_group_recent)
+    r.add_get("/project/tasks", api.get_project_tasks)
+    r.add_post("/project/tasks/status", api.post_project_task_status)
     r.add_get("/deadlines", api.get_deadlines)
     r.add_get("/material/search", api.get_material_search)
     r.add_get("/material/get", api.get_material)
@@ -385,15 +477,40 @@ def make_app(services) -> web.Application:
     return app
 
 
-async def start(services) -> web.AppRunner:
-    sock = services.settings.ops_socket
-    sock.parent.mkdir(parents=True, exist_ok=True)
-    if sock.exists():
-        sock.unlink()
-    runner = web.AppRunner(make_app(services))
-    await runner.setup()
-    await web.UnixSite(runner, str(sock)).start()
-    os.chmod(sock, 0o660)
+async def start(services, transport: str | None = None) -> web.AppRunner:
+    """Serve the API and write the endpoint file that tells clients how to reach it."""
+    cfg = services.settings
+    transport = transport or hostos.api_transport(cfg.ops_api_transport)
+    ep_path = localapi.endpoint_path(cfg)
+    if transport == "tcp":
+        token = localapi.new_token()
+        runner = web.AppRunner(make_app(services, token=token))
+        await runner.setup()
+        await web.TCPSite(runner, "127.0.0.1", cfg.ops_port).start()
+        port = runner.addresses[0][1]
+        localapi.write_endpoint(ep_path, {"transport": "tcp", "host": "127.0.0.1", "port": port, "token": token})
+        log.info("local API on 127.0.0.1:%s (token in %s)", port, ep_path)
+    else:
+        sock = cfg.ops_socket
+        sock.parent.mkdir(parents=True, exist_ok=True)
+        if sock.exists():
+            sock.unlink()
+        runner = web.AppRunner(make_app(services))
+        await runner.setup()
+        await web.UnixSite(runner, str(sock)).start()
+        os.chmod(sock, 0o660)
+        try:
+            localapi.write_endpoint(ep_path, {"transport": "unix", "path": str(sock)})
+        except OSError:
+            log.warning("could not write %s; clients will use the default socket path", ep_path)
+        log.info("local API on %s", sock)
     services.extra["api_runner"] = runner
-    log.info("local API on %s", sock)
+    services.extra["api_endpoint"] = ep_path
     return runner
+
+
+def stop_cleanup(services) -> None:
+    """Remove the endpoint file on a clean shutdown (a stale one is harmless: clients check it is alive)."""
+    ep = services.extra.get("api_endpoint")
+    if ep:
+        localapi.clear_endpoint(ep)  # never raises

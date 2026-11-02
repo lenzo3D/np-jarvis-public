@@ -15,7 +15,7 @@ GIT_ENV = ["-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=fa
 
 
 def git(cwd: Path, *args: str) -> str:
-    return subprocess.run(["git", *GIT_ENV, *args], cwd=cwd, check=True, capture_output=True, text=True).stdout.strip()
+    return subprocess.run(["git", *GIT_ENV, *args], cwd=cwd, check=True, capture_output=True, text=True, encoding="utf-8").stdout.strip()
 
 
 @pytest.fixture
@@ -24,22 +24,25 @@ def repos(tmp_path):
     subprocess.run(["git", "init", "-q", "--bare", "-b", "main", str(origin)], check=True)
     subprocess.run(["git", "clone", "-q", str(origin), str(dev)], check=True, capture_output=True)
     git(dev, "checkout", "-q", "-b", "main")
-    (dev / "pyproject.toml").write_text("v1\n")
-    (dev / "app.py").write_text("one\n")
+    (dev / "pyproject.toml").write_text("v1\n", encoding="utf-8")
+    (dev / "app.py").write_text("one\n", encoding="utf-8")
     git(dev, "add", "-A"); git(dev, "commit", "-q", "-m", "first"); git(dev, "push", "-q", "-u", "origin", "main")
     subprocess.run(["git", "clone", "-q", str(origin), str(mac)], check=True, capture_output=True)
     return mac, dev
 
 
 def publish(dev: Path, name: str, text: str, msg: str):
-    (dev / name).write_text(text)
+    (dev / name).write_text(text, encoding="utf-8")
     git(dev, "add", "-A"); git(dev, "commit", "-q", "-m", msg); git(dev, "push", "-q", "origin", "main")
+
+
+needs_shebang = pytest.mark.skipif(sys.platform == "win32", reason="the fake pip is a shebang script")
 
 
 def fake_pip(tmp_path) -> tuple[str, Path]:
     log = tmp_path / "pip.log"
     exe = tmp_path / "py"
-    exe.write_text(f"#!{sys.executable}\nimport sys\nopen({str(log)!r}, 'a').write(' '.join(sys.argv[1:]) + '\\n')\n")
+    exe.write_text(f"#!{sys.executable}\nimport sys\nopen({str(log)!r}, 'a').write(' '.join(sys.argv[1:]) + '\\n')\n", encoding="utf-8")
     exe.chmod(0o755)
     return str(exe), log
 
@@ -52,51 +55,53 @@ async def test_up_to_date_then_behind(repos):
     publish(dev, "app.py", "two\n", "Make alerts readable")
     st = await up.check()
     assert st["behind"] == 1 and st["changes"] == ["Make alerts readable"] and "1 update" in st["message"]
-    assert (mac / "app.py").read_text() == "one\n"  # checking never changes files
+    assert (mac / "app.py").read_text(encoding="utf-8") == "one\n"  # checking never changes files
 
 
+@needs_shebang
 async def test_apply_pulls_and_requests_restart_without_pip_when_deps_unchanged(repos, tmp_path):
     mac, dev = repos
     py, log = fake_pip(tmp_path)
     publish(dev, "app.py", "two\n", "change")
     res = await Updater(mac, python=py).apply()
-    assert res["ok"] and res["restart"] and (mac / "app.py").read_text() == "two\n"
+    assert res["ok"] and res["restart"] and (mac / "app.py").read_text(encoding="utf-8") == "two\n"
     assert not log.exists()
     again = await Updater(mac, python=py).apply()
     assert again["ok"] and not again["restart"] and "up to date" in again["message"]
 
 
+@needs_shebang
 async def test_apply_reinstalls_when_pyproject_changed(repos, tmp_path):
     mac, dev = repos
     py, log = fake_pip(tmp_path)
     publish(dev, "pyproject.toml", "v2\n", "new dependency")
     res = await Updater(mac, python=py).apply()
     assert res["ok"] and res["restart"]
-    assert log.read_text().split() == ["-m", "pip", "install", "-q", "-e", str(mac)]
+    assert log.read_text(encoding="utf-8").split() == ["-m", "pip", "install", "-q", "-e", str(mac)]
 
 
 async def test_local_edits_are_stashed_not_destroyed(repos):
     mac, dev = repos
     publish(dev, "app.py", "two\n", "remote change")
-    (mac / "app.py").write_text("my edit\n")
+    (mac / "app.py").write_text("my edit\n", encoding="utf-8")
     st = await Updater(mac).check()
     assert st["dirty"] and st["dirty_files"] == ["app.py"] and any("saved aside" in n for n in st["notes"])
     res = await Updater(mac, python=sys.executable).apply()
     assert res["ok"] and res["restart"] and "git stash" in res["message"]
-    assert (mac / "app.py").read_text() == "two\n"
+    assert (mac / "app.py").read_text(encoding="utf-8") == "two\n"
     assert "my edit" in git(mac, "stash", "show", "-p", "stash@{0}")
 
 
 async def test_local_commits_are_kept_on_a_backup_branch(repos):
     mac, dev = repos
-    (mac / "local.txt").write_text("mine\n")
+    (mac / "local.txt").write_text("mine\n", encoding="utf-8")
     git(mac, "add", "-A"); git(mac, "commit", "-q", "-m", "local commit")
     publish(dev, "app.py", "two\n", "remote change")
     st = await Updater(mac).check()
     assert st["ahead"] == 1 and st["behind"] == 1 and any("backup branch" in n for n in st["notes"])
     res = await Updater(mac, python=sys.executable).apply()
     assert res["ok"] and "backup/main-" in res["message"]
-    assert (mac / "app.py").read_text() == "two\n" and not (mac / "local.txt").exists()
+    assert (mac / "app.py").read_text(encoding="utf-8") == "two\n" and not (mac / "local.txt").exists()
     backup = [b.strip() for b in git(mac, "branch", "--list", "backup/*").splitlines()][0]
     assert "local.txt" in git(mac, "show", "--stat", backup)
 
@@ -104,21 +109,21 @@ async def test_local_commits_are_kept_on_a_backup_branch(repos):
 async def test_other_branch_switches_to_main_and_keeps_the_branch(repos):
     mac, dev = repos
     git(mac, "checkout", "-q", "-b", "feature")
-    (mac / "f.txt").write_text("f\n")
+    (mac / "f.txt").write_text("f\n", encoding="utf-8")
     git(mac, "add", "-A"); git(mac, "commit", "-q", "-m", "feature work")
     publish(dev, "app.py", "two\n", "remote change")
     res = await Updater(mac, python=sys.executable).apply()
     assert res["ok"] and res["restart"]
-    assert git(mac, "rev-parse", "--abbrev-ref", "HEAD") == "main" and (mac / "app.py").read_text() == "two\n"
+    assert git(mac, "rev-parse", "--abbrev-ref", "HEAD") == "main" and (mac / "app.py").read_text(encoding="utf-8") == "two\n"
     assert "feature" in git(mac, "branch", "--list", "feature") and git(mac, "branch", "--list", "backup/feature-*")
 
 
 async def test_finder_ds_store_never_counts_as_local_work_and_never_blocks(repos):
     mac, dev = repos
-    (dev / ".DS_Store").write_text("v1")
+    (dev / ".DS_Store").write_text("v1", encoding="utf-8")
     git(dev, "add", "-A"); git(dev, "commit", "-q", "-m", "oops tracked ds_store"); git(dev, "push", "-q", "origin", "main")
     git(mac, "pull", "-q", "--ff-only")
-    (mac / ".DS_Store").write_text("finder rewrote this")  # Finder touches it whenever the folder is opened
+    (mac / ".DS_Store").write_text("finder rewrote this", encoding="utf-8")  # Finder touches it whenever the folder is opened
     git(dev, "rm", "-q", "--cached", ".DS_Store"); git(dev, "commit", "-q", "-m", "stop tracking .DS_Store")
     git(dev, "push", "-q", "origin", "main")
     st = await Updater(mac).check()

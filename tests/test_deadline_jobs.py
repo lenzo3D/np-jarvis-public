@@ -34,6 +34,17 @@ async def test_deadlines_text(db, env_file):
     assert "Tue 03 Nov · Investments: Quiz 2 [tentative]" in text and "Far away" not in text
 
 
+async def test_deadlines_text_marks_submission_state(db, env_file):
+    s = svc(db, env_file)
+    add(db, "a", "Tutorial 5", "2026-10-30T15:29:00+00:00")
+    add(db, "b", "Tutorial 6", "2026-10-30T15:29:00+00:00")
+    db.conn.execute("insert into due_dates(item_key, due_at, submitted) values ('a', null, 1)")
+    db.conn.execute("insert into due_dates(item_key, due_at, user_confirmed) values ('b', null, 1)")
+    text = await deadline_jobs.deadlines_text(s, days=14)
+    assert "Tutorial 5 [submitted]" in text
+    assert "Tutorial 6 [you say submitted; POLITEMall has not confirmed it]" in text
+
+
 async def test_sync_warns_once_on_calendar_auth(db, env_file):
     s = svc(db, env_file)
 
@@ -62,7 +73,7 @@ def test_read_only_mcp_server_has_no_write_tools():
     code = ("import asyncio; from school_mcp.server import server; "
             "print(sorted(t.name for t in asyncio.run(server.list_tools())))")
     out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, cwd=".",
-                         env={"SCHOOL_MCP_READONLY": "1", "PATH": ""}).stdout
+                         env={"SCHOOL_MCP_READONLY": "1", "PATH": ""}, encoding="utf-8").stdout
     assert "get_deadlines" in out
     for w in ("submit_assignment", "post_discussion", "send_teams_message", "send_file_to_me", "download_file"):
         assert w not in out

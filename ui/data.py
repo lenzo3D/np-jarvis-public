@@ -6,6 +6,7 @@ import shutil
 import sqlite3
 from datetime import datetime, timedelta, timezone
 
+from core import hostos, usagecap
 from ops.gcal_events import short_course
 
 
@@ -13,7 +14,7 @@ def _connect(settings) -> sqlite3.Connection | None:
     if not settings.db_path.exists():
         return None
     try:
-        conn = sqlite3.connect(f"file:{settings.db_path}?mode=ro", uri=True, timeout=2)
+        conn = sqlite3.connect(hostos.sqlite_ro_uri(settings.db_path), uri=True, timeout=2)
         conn.row_factory = sqlite3.Row
         return conn
     except sqlite3.Error:
@@ -30,7 +31,7 @@ def _setting(conn, key: str, default=None):
 
 def checks(settings) -> list[dict]:
     """Setup checklist. Reports presence only; never reads secret values."""
-    return [
+    out = [
         {"name": "Claude Code installed", "ok": shutil.which("claude") is not None,
          "hint": "Install Claude Code and sign in once with: claude"},
         {"name": "Telegram bot configured", "ok": bool(settings.ops_bot_token and settings.allowed_telegram_id),
@@ -38,6 +39,11 @@ def checks(settings) -> list[dict]:
         {"name": "Semester start date set", "ok": bool(settings.semester_start),
          "hint": "Set SEMESTER_START=YYYY-MM-DD (Monday of week 1) in secrets.env, then restart JARVIS"},
     ]
+    if settings.semester_start:  # optional, so it never shows as a problem
+        rw = getattr(settings, "recess_week", None)
+        out.append({"name": f"Recess week after teaching week {rw}" if rw else "No recess week set (optional)", "ok": True,
+                    "hint": "Optional: set RECESS_WEEK=N (the teaching week after which the break falls) in secrets.env"})
+    return out
 
 
 # How old the last successful check may be before the connection no longer counts as live.
@@ -261,7 +267,8 @@ def deadlines(settings, days: int = 60, now: datetime | None = None) -> list[dic
 def usage(settings, days: int = 7, now: datetime | None = None) -> dict:
     """Claude calls per job and per day. Token counts are real for agent runs and estimates (about 4 characters per
     token) for the text jobs, flagged by `estimated`."""
-    out = {"days": days, "total": {"calls": 0, "failed": 0, "seconds": 0.0, "in_tokens": 0, "out_tokens": 0},
+    out = {"days": days, "total": {"calls": 0, "failed": 0, "seconds": 0.0, "in_tokens": 0, "out_tokens": 0,
+                                                      "cost_usd": 0.0},
            "by_job": [], "by_day": []}
     conn = _connect(settings)
     if conn is None:
@@ -287,7 +294,7 @@ def usage(settings, days: int = 7, now: datetime | None = None) -> dict:
         j["out_tokens"] += r["out_tokens"] or 0
         j["cache_tokens"] += r["cache_tokens"] or 0
         j["estimated"] = j["estimated"] or bool(r["estimated"])
-        j["cost_usd"] += r["cost_usd"] or 0
+        j["cost_usd"] += usagecap.row_cost(r)
         j["turns"] += r["turns"] or 0
         j["last"] = r["ts"]
         day = datetime.fromisoformat(r["ts"]).astimezone(settings.tz).strftime("%Y-%m-%d")
@@ -296,8 +303,9 @@ def usage(settings, days: int = 7, now: datetime | None = None) -> dict:
     for j in out["by_job"]:
         j["seconds"] = round(j["seconds"], 1)
         j["cost_usd"] = round(j["cost_usd"], 2)
-        for k in ("calls", "failed", "seconds", "in_tokens", "out_tokens"):
+        for k in ("calls", "failed", "seconds", "in_tokens", "out_tokens", "cost_usd"):
             out["total"][k] += j[k]
     out["total"]["seconds"] = round(out["total"]["seconds"], 1)
+    out["total"]["cost_usd"] = round(out["total"]["cost_usd"], 2)
     out["by_day"] = [{"day": d, "calls": c} for d, c in sorted(per_day.items())]
     return out

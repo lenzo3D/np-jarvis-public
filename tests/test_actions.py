@@ -58,7 +58,7 @@ def test_file_outside_workspace_rejected(db, ws_file, tmp_path):
 
 def test_symlinked_file_rejected(db, ws_file, tmp_path):
     secret = tmp_path / "secrets.env"
-    secret.write_text("POLITEMALL_PASS=hunter2")
+    secret.write_text("POLITEMALL_PASS=hunter2", encoding="utf-8")
     link = ws_file.parent / "answers.docx"
     link.symlink_to(secret)
     with pytest.raises(ValueError):
@@ -159,7 +159,7 @@ async def test_submit_uses_snapshot_even_if_file_swapped(db, env_file, ws_file, 
     original = ws_file.read_bytes()
     await ap.propose("brightspace_submit", {"course": "INV2101", "folder_id": 55, "file_path": str(ws_file)}, "")
     secret = tmp_path / "secrets.env"
-    secret.write_text("POLITEMALL_PASS=hunter2")
+    secret.write_text("POLITEMALL_PASS=hunter2", encoding="utf-8")
     ws_file.unlink()
     ws_file.symlink_to(secret)
     await ap.on_approve("1")
@@ -172,7 +172,7 @@ async def test_extra_params_from_claude_ignored(db, env_file, ws_file, tmp_path)
     s = svc(db, env_file)
     ap = Approvals(s)
     secret = tmp_path / "secrets.env"
-    secret.write_text("x")
+    secret.write_text("x", encoding="utf-8")
     await ap.propose("brightspace_submit", {"course": "INV2101", "folder_id": 55, "file_path": str(ws_file),
                                             "snapshot": str(secret), "sha256": "0" * 64}, "")
     await ap.on_approve("1")
@@ -213,3 +213,12 @@ async def test_discussion_card_names_forum_and_topic(db, env_file):
                                                                "subject": "Q3", "text": "Is (b) 5%?"}, "")
     text = s.notifier.messages[0][0]
     assert "Week 7 Q&A › Tutorial questions" in text and "Is (b) 5%?" in text
+
+
+def test_prepare_submission_cleans_a_hostile_file_name(tmp_path):
+    from core.actions import prepare_submission
+    ws, out = tmp_path / "ws", tmp_path / "out"
+    ws.mkdir(), out.mkdir()
+    (ws / 'a"b‮.docx').write_bytes(b"x")
+    p = prepare_submission(ws, out, 'a"b‮.docx')
+    assert p["file_name"] == "a_b_.docx" and p["snapshot"].endswith("a_b_.docx")

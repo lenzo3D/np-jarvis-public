@@ -6,12 +6,12 @@ import contextlib
 import contextvars
 import json
 import logging
-import os
-import shutil
 import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import AsyncIterator, Callable
+
+from core import hostos
 
 log = logging.getLogger(__name__)
 
@@ -54,11 +54,22 @@ def attach_db(db, clock: Callable[[], datetime] = lambda: datetime.now(timezone.
         log.debug("usage prune failed", exc_info=True)
 
 
+_after: Callable[[], None] | None = None
+
+
+def set_after_record(fn: Callable[[], None] | None) -> None:
+    """fn() runs after each logged call; Ops uses it to check the usage cap right away."""
+    global _after
+    _after = fn
+
+
 def record_usage(**fields) -> None:
     if _sink is None:
         return
     try:
         _sink(job=_job.get(), **fields)
+        if _after is not None:
+            _after()
     except Exception:  # noqa: BLE001 - bookkeeping must never break a real job
         log.debug("usage record failed", exc_info=True)
 
@@ -72,15 +83,17 @@ def usage_from_result(ev: dict) -> dict:
 
 
 def load_prompt(name: str, **fields) -> str:
-    text = (PROMPTS / f"{name}.md").read_text()
+    text = (PROMPTS / f"{name}.md").read_text(encoding="utf-8")
     for k, v in fields.items():
         text = text.replace("{{" + k + "}}", str(v))
     return text
 
 
 def _base_cmd(run_as: str | None) -> list[str]:
-    exe = os.environ.get("CLAUDE_BIN") or shutil.which("claude") or "claude"
-    return ["sudo", "-n", "-H", "-u", run_as, exe] if run_as else [exe]
+    try:
+        return hostos.claude_command(run_as)
+    except hostos.LauncherError as e:
+        raise ClaudeError(str(e)) from e
 
 
 async def run_text(prompt: str, input_text: str, model: str = "sonnet", timeout: float = 180,
@@ -114,7 +127,8 @@ async def run_agent(prompt: str, cwd: Path, run_as: str | None = None,
     Yields assistant text blocks as they stream; the final result text last."""
     cmd = _base_cmd(run_as) + ["-p", prompt, "--output-format", "stream-json", "--verbose"]
     proc = await asyncio.create_subprocess_exec(*cmd, cwd=str(cwd), stdout=asyncio.subprocess.PIPE,
-                                                stderr=asyncio.subprocess.PIPE, limit=16 * 1024 * 1024)
+                                                stderr=asyncio.subprocess.PIPE, limit=16 * 1024 * 1024,
+                                                **hostos.new_group_kwargs())
     started, usage, ok = time.monotonic(), {}, False
     loop = asyncio.get_running_loop()
     deadline = loop.time() + timeout
@@ -148,5 +162,5 @@ async def run_agent(prompt: str, cwd: Path, run_as: str | None = None,
     finally:
         record_usage(kind="agent", model=None, ok=ok, seconds=time.monotonic() - started, **usage)
         if proc.returncode is None:
-            proc.kill()
+            hostos.terminate_tree(proc.pid, force=True)  # the whole group, so MCP/node children do not linger
             await proc.wait()

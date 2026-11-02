@@ -24,6 +24,7 @@
       <button class="nav-item" data-view="chat" role="tab" title="Talk to JARVIS"><i class="ico ico-chat"></i><span class="nl">Talk to JARVIS</span></button>
       <button class="nav-item" data-view="calendar" role="tab" title="Calendar"><i class="ico ico-cal"></i><span class="nl">Calendar</span></button>
       <button class="nav-item" data-view="chats" role="tab" title="Chats"><i class="ico ico-people"></i><span class="nl">Chats</span></button>
+      <button class="nav-item" data-view="tasks" role="tab" title="Project tasks"><i class="ico ico-check"></i><span class="nl">Tasks</span></button>
       <button class="nav-item" data-view="inbox" role="tab" title="Email"><i class="ico ico-mail"></i><span class="nl">Email</span></button>
       <button class="nav-item" data-view="deadlines" role="tab" title="Deadlines"><i class="ico ico-list"></i><span class="nl">Deadlines</span></button>
       <button class="nav-item" data-view="usage" role="tab" title="Usage"><i class="ico ico-bars"></i><span class="nl">Usage</span></button>
@@ -43,6 +44,7 @@
       <div class="clock"><div id="clock-date" class="clock-date"></div><div id="clock-time" class="clock-time"></div></div>
       <div class="top-right">
         <div id="chips" class="chips" aria-label="Connection status"></div>
+        <button id="btn-usage-resume" class="btn" hidden title="Usage cap reached: class chat summaries and date extraction are paused">Paused to save usage - resume</button>
         <button id="btn-start" class="btn btn-primary" hidden>Start</button>
         <button id="btn-restart" class="btn" hidden>Restart</button>
         <button id="btn-stop" class="btn btn-danger" hidden>Stop</button>
@@ -196,6 +198,24 @@
         </div>
       </section>
 
+      <!-- ===== TASKS (project groups: who owes what) ===== -->
+      <section id="view-tasks" class="view">
+        <div class="hud" id="tasks-empty" hidden>
+          <h2>Project tasks</h2>
+          <p>No group is marked as a project group yet. In the Chats tab, press Change groups and set the type of your project group to <b>Project</b>. JARVIS then keeps a list of who owes what from that group's chat. It only reads; it never posts in the group.</p>
+        </div>
+        <div class="hud" id="tasks-main" hidden>
+          <div class="row-between"><h2>Project tasks</h2><span class="muted small" id="tasks-note">Read from the group chats. Items are tentative until you check them. Done items stay for 7 days.</span></div>
+          <div id="tasks-groups"></div>
+          <div class="method" id="tasks-aliases-box">
+            <h3>Names</h3>
+            <p class="muted small">If the chat calls someone by a nickname, say who that is. Use <b>me</b> as the person for your own nicknames. Your own messages are recognised automatically.</p>
+            <div id="tasks-aliases"></div>
+            <div class="btn-row"><button id="alias-add" class="btn" type="button">Add a name</button><button id="alias-save" class="btn btn-primary" type="button">Save names</button><span id="alias-note" class="muted small"></span></div>
+          </div>
+        </div>
+      </section>
+
       <!-- ===== EMAIL ===== -->
       <section id="view-inbox" class="view">
         <div class="hud" id="inbox-setup" hidden>
@@ -233,6 +253,22 @@
 
       <!-- ===== USAGE ===== -->
       <section id="view-usage" class="view">
+        <div class="hud">
+          <h2>Usage cap</h2>
+          <p class="muted small">Optional. Set a daily and/or weekly limit in estimated usage (US dollars, worked out from the cost Claude Code reports; on a subscription it is a yardstick, not a bill). JARVIS warns you on Telegram at 80% and 100%. At 100% it pauses class chat summaries and date extraction; chat, Do it and the morning briefing keep working. Paused work resumes by itself when the day or week resets (Singapore time, weeks start Monday). Leave a limit empty for no cap.</p>
+          <div id="cap-banner" class="notice" hidden></div>
+          <div id="cap-meters" class="stats"></div>
+          <div class="cap-form">
+            <label>Daily limit (est. $)<input id="cap-daily" type="number" min="0" step="0.5" placeholder="off"></label>
+            <label>Weekly limit (est. $)<input id="cap-weekly" type="number" min="0" step="0.5" placeholder="off"></label>
+            <label class="cap-check"><input id="cap-keep" type="checkbox"> Keep group replies running when the cap is reached (they stop by default, to protect your usage)</label>
+          </div>
+          <h3>Model for each job</h3>
+          <p class="muted small">The smaller model (haiku) is cheaper and fine for short summaries and picking dates out of chat. Course documents and the briefing default to sonnet. Chat default means whatever your Claude Code uses.</p>
+          <div id="cap-models" class="cap-form"></div>
+          <div class="row-between"><span id="cap-msg" class="muted small"></span>
+            <span><button id="cap-resume" class="btn" hidden>Resume for the rest of the period</button> <button id="cap-save" class="btn btn-primary">Save</button></span></div>
+        </div>
         <div class="hud">
           <div class="row-between"><h2>Claude Usage</h2>
             <select id="usage-days"><option value="1">Last 24 hours</option><option value="7" selected>Last 7 days</option><option value="30">Last 30 days</option><option value="90">Last 90 days</option></select>

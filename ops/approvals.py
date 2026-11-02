@@ -6,6 +6,7 @@ from pathlib import Path
 
 from core import actions
 from core.actions import ActionNotPending
+from core.text import shown_file_name
 from ops.api import find_course
 from ops.format import fmt_dt, parse_iso
 
@@ -19,7 +20,7 @@ def card(action, ctx: dict) -> tuple[str, list[list[tuple[str, str]]]]:
     if ctx.get("dev"):
         lines[0] += " (dev: actions disabled)"
     if action.kind == "brightspace_submit":
-        lines.append(f"File: {p['file_name']} ({max(1, p['size'] // 1024)} KB, sha256 {p['sha256'][:12]})")
+        lines.append(f"File: {shown_file_name(str(p['file_name']))} ({max(1, p['size'] // 1024)} KB, sha256 {p['sha256'][:12]})")
         lines.append(f"To: {ctx.get('course', '')} › {ctx.get('target') or 'folder ' + str(p['folder_id'])}")
         if ctx.get("due"):
             lines.append(f"Due: {ctx['due']}")
@@ -150,7 +151,7 @@ class Approvals:
         items = actions.list_pending(self.s.db)
         if not items:
             return "No pending approvals."
-        return "\n".join(f"#{a.id} {TITLES[a.kind]}: {a.summary or a.params.get('file_name', '')}"[:200]
+        return "\n".join(f"#{a.id} {TITLES[a.kind]}: {a.summary or shown_file_name(str(a.params.get('file_name', '')))}"[:200]
                          for a in items)
 
     async def expire_job(self) -> None:

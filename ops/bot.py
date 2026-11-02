@@ -28,7 +28,7 @@ from ops.textfmt import plain
 log = logging.getLogger(__name__)
 Buttons = list[list[tuple[str, str]]]
 COMMANDS = ["status", "login", "mute", "unmute", "quiet", "briefing", "pause", "resume", "pending", "deadlines",
-            "scan", "new"]
+            "scan", "new", "usage", "tasks"]
 
 
 class Notifier:
@@ -155,7 +155,14 @@ class Commands:
         self.db.set_setting("paused", "1")
         return "Alerts paused. /resume to turn back on."
 
+    async def cmd_usage(self, args):
+        return await self._hook("usage", *args[:1])
+
     async def cmd_resume(self, args):
+        if args and args[0] == "usage":
+            return await self._hook("usage", "resume")
+        if self.db.get_setting("paused") == "1":
+            self.db.set_setting("resume_remind", "1")  # the next reminders run re-sends anything due in the next 6 h
         self.db.set_setting("paused", "0")
         return "Alerts resumed."
 
@@ -164,6 +171,9 @@ class Commands:
 
     async def cmd_deadlines(self, args):
         return await self._hook("deadlines", *([int(args[0])] if args and args[0].isdigit() else []))
+
+    async def cmd_tasks(self, args):
+        return await self._hook("tasks", " ".join(args))
 
     async def cmd_scan(self, args):
         return await self._hook("scan")
@@ -230,7 +240,8 @@ def build_app(settings: Settings, db: DB, hooks: dict, router: CallbackRouter | 
             return
         user = update.effective_user
         sender = (user.full_name if user else None) or (msg.sender_chat.title if msg.sender_chat else None) or "?"
-        tg_group.store_message(db, GroupMessage(chat.id, msg.message_id, sender, text, msg.date))
+        tg_group.store_message(db, GroupMessage(chat.id, msg.message_id, sender, text, msg.date,
+                                                user.id if user else None))
 
     app.add_handler(MessageHandler(filters.ChatType.GROUPS & (filters.TEXT | filters.CAPTION)
                                    & ~filters.StatusUpdate.ALL, on_group_message), group=1)

@@ -1,4 +1,5 @@
 import json
+import sys
 
 import pytest
 import respx
@@ -84,12 +85,25 @@ def test_token_written_atomically(tmp_path):
     from core.gcal import _write_private
     p = tmp_path / "google_token.json"
     _write_private(p, '{"a": 1}')
-    assert p.read_text() == '{"a": 1}' and oct(p.stat().st_mode & 0o777) == "0o600"
+    assert p.read_text(encoding="utf-8") == '{"a": 1}'
+    if sys.platform != "win32":  # Windows has no 0600 mode
+        assert oct(p.stat().st_mode & 0o777) == "0o600"
     assert not list(tmp_path.glob("*.tmp"))
 
 
 async def test_corrupt_token_file_is_auth_required(tmp_path):
     p = tmp_path / "google_token.json"
-    p.write_text("{not json")
+    p.write_text("{not json", encoding="utf-8")
     with pytest.raises(CalendarAuthRequired):
         await GCal(token_path=p).insert({})
+
+
+async def test_get_reads_one_event_and_gone_or_cancelled_raise(api):
+    api.get("/calendars/primary/events/ev1").respond(json={"id": "ev1", "extendedProperties": {"private": {"jarvis_key": "k"}}})
+    api.get("/calendars/primary/events/ev2").respond(404)
+    api.get("/calendars/primary/events/ev3").respond(json={"id": "ev3", "status": "cancelled"})
+    g = GCal(token_getter=Tokens("T1"))
+    assert (await g.get("ev1"))["id"] == "ev1"
+    for eid in ("ev2", "ev3"):
+        with pytest.raises(EventGone):
+            await g.get(eid)

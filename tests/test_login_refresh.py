@@ -75,5 +75,5 @@ def test_boot_checks_are_scheduled_shortly_after_start(env_file):
 def test_panel_probe_job_does_not_write_into_the_repo():
     from ui.jobs import JOBS
     assert "--no-write" in JOBS["probe_brightspace"]["cmd"]
-    src = (ROOT / "scripts" / "probe_brightspace.py").read_text()
+    src = (ROOT / "scripts" / "probe_brightspace.py").read_text(encoding="utf-8")
     assert 'WRITE = "--no-write" not in sys.argv' in src and "if WRITE:" in src

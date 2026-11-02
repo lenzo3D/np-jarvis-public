@@ -1,6 +1,7 @@
 """Live probe for Teams: which mode works (Graph token from the web session, or UI fallback)?
 
     .venv/bin/python scripts/probe_teams.py [--show]
+    (Windows: use .venv\\Scripts\\python.exe instead of .venv/bin/python)
 Read-only. Appends results to docs/probe-results.md.
 """
 from __future__ import annotations
@@ -41,7 +42,7 @@ async def main() -> None:
     finally:
         await sm.close()
     print("\n".join(lines))
-    with open(ROOT / "docs" / "probe-results.md", "a") as fh:
+    with open(ROOT / "docs" / "probe-results.md", "a", encoding="utf-8") as fh:
         fh.write("\n".join(lines) + "\n")
 
 

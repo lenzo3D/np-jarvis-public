@@ -1,4 +1,4 @@
-"""Check that this JARVIS install is healthy:  .venv/bin/python scripts/doctor.py
+"""Check that this JARVIS install is healthy:  .venv/bin/python scripts/doctor.py   (Windows: .venv\\Scripts\\python.exe)
 
 Prints one line per check and what to do about anything that fails. Never prints secret values.
 """
@@ -7,18 +7,18 @@ from __future__ import annotations
 import importlib
 import shutil
 import socket
-import stat
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from core import hostos  # noqa: E402
 from core.config import env_path, load_settings  # noqa: E402
 
 
 def check_python():
     ok = sys.version_info >= (3, 12)
-    return ok, f"Python {sys.version_info.major}.{sys.version_info.minor}", "Install Python 3.12 or newer and run ./install.sh again."
+    return ok, f"Python {sys.version_info.major}.{sys.version_info.minor}", f"Install Python 3.12 or newer and run {hostos.installer_hint()} again."
 
 
 def check_deps():
@@ -30,7 +30,7 @@ def check_deps():
         except ImportError:
             missing.append(mod)
     return not missing, "Python packages" + (f" (missing: {', '.join(missing)})" if missing else ""), \
-        "Run ./install.sh again."
+        f"Run {hostos.installer_hint()} again."
 
 
 def check_chromium():
@@ -41,7 +41,7 @@ def check_chromium():
             ok = Path(p.chromium.executable_path).exists()
     except Exception:  # noqa: BLE001 - any failure means the browser is not usable
         ok = False
-    return ok, "Browser for sign-ins (Chromium)", "Run: .venv/bin/python -m playwright install chromium"
+    return ok, "Browser for sign-ins (Chromium)", f"Run: {hostos.python_hint('-m playwright install chromium')}"
 
 
 def check_claude():
@@ -62,10 +62,22 @@ def check_config():
 
 def check_permissions():
     path = env_path()
+    if hostos.is_windows():  # Windows has no 0600 mode; access follows the folder's permissions
+        return True, "secrets.env (Windows: keep JARVIS inside your own user folder so others cannot read it)", ""
     if not path.exists():
         return True, "secrets.env is private", ""
-    mode = stat.S_IMODE(path.stat().st_mode)
-    return not (mode & 0o077), "secrets.env is private to you", f"Run: chmod 600 {path}"
+    return hostos.secrets_mode_is_private(path), "secrets.env is private to you", f"Run: chmod 600 {path}"
+
+
+def check_run_as():
+    if hostos.is_windows() and path_has_run_as():
+        return False, "CLAUDE_RUN_AS is set", "Windows cannot run Claude as another user. Remove CLAUDE_RUN_AS from secrets.env."
+    return True, "No run-as user configured", ""
+
+
+def path_has_run_as() -> bool:
+    path = env_path()
+    return path.exists() and bool(load_settings(path).claude_run_as)
 
 
 def check_port():
@@ -75,7 +87,7 @@ def check_port():
     return True, "Panel port 8765 " + ("(JARVIS panel already running)" if busy else "(free)"), ""
 
 
-CHECKS = [check_python, check_deps, check_chromium, check_claude, check_config, check_permissions, check_port]
+CHECKS = [check_python, check_deps, check_chromium, check_claude, check_config, check_permissions, check_run_as, check_port]
 
 
 def main() -> int:

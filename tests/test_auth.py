@@ -1,4 +1,5 @@
 import asyncio
+import sys
 from pathlib import Path
 
 import pytest
@@ -10,11 +11,11 @@ FIX = Path(__file__).parent / "fixtures"
 
 
 def test_extract_mfa_number():
-    assert extract_mfa_number((FIX / "mfa_number_match.html").read_text()) == "47"
+    assert extract_mfa_number((FIX / "mfa_number_match.html").read_text(encoding="utf-8")) == "47"
 
 
 def test_extract_mfa_number_none():
-    assert extract_mfa_number((FIX / "login_redirect.html").read_text()) is None
+    assert extract_mfa_number((FIX / "login_redirect.html").read_text(encoding="utf-8")) is None
 
 
 def test_is_login_page():
@@ -165,7 +166,9 @@ async def test_session_cookies_saved_and_restored(env_file):
              "expires": -1, "httpOnly": True, "secure": True, "sameSite": "Lax"}]
     await sm.save_cookies("brightspace", FakeCtx(live))
     path = s.state_dir / "sessions" / "brightspace.cookies.json"
-    assert path.exists() and oct(path.stat().st_mode & 0o777) == "0o600"
+    assert path.exists()
+    if sys.platform != "win32":  # Windows has no 0600 mode
+        assert oct(path.stat().st_mode & 0o777) == "0o600"
     fresh = FakeCtx()
     await sm.restore_cookies("brightspace", fresh)
     assert fresh.added == live
@@ -190,7 +193,7 @@ async def test_failed_cookie_fetch_keeps_previous_file(env_file):
 
     await sm.save_cookies("brightspace", Dead())
     import json
-    assert json.loads((s.state_dir / "sessions" / "brightspace.cookies.json").read_text()) == good
+    assert json.loads((s.state_dir / "sessions" / "brightspace.cookies.json").read_text(encoding="utf-8")) == good
 
 
 async def test_empty_cookie_list_does_not_overwrite(env_file):
@@ -200,4 +203,4 @@ async def test_empty_cookie_list_does_not_overwrite(env_file):
     await sm.save_cookies("teams", FakeCtx(good))
     await sm.save_cookies("teams", FakeCtx([]))
     import json
-    assert json.loads((s.state_dir / "sessions" / "teams.cookies.json").read_text()) == good
+    assert json.loads((s.state_dir / "sessions" / "teams.cookies.json").read_text(encoding="utf-8")) == good

@@ -1,5 +1,6 @@
 import json
 import stat
+import sys
 
 import httpx
 import respx
@@ -17,16 +18,17 @@ API = f"https://api.telegram.org/bot{TOKEN}"
 
 def test_update_env_file_keeps_comments_and_sets_mode(tmp_path):
     p = tmp_path / "secrets.env"
-    p.write_text("# keep me\nOPS_BOT_TOKEN=old\n# COURSE_PREFIX=\nOTHER=1\n")
+    p.write_text("# keep me\nOPS_BOT_TOKEN=old\n# COURSE_PREFIX=\nOTHER=1\n", encoding="utf-8")
     update_env_file(p, {"OPS_BOT_TOKEN": "new", "USER_NAME": "Aisha"})
-    assert p.read_text().splitlines() == ["# keep me", "OPS_BOT_TOKEN=new", "# COURSE_PREFIX=", "OTHER=1", "USER_NAME=Aisha"]
-    assert stat.S_IMODE(p.stat().st_mode) == 0o600
+    assert p.read_text(encoding="utf-8").splitlines() == ["# keep me", "OPS_BOT_TOKEN=new", "# COURSE_PREFIX=", "OTHER=1", "USER_NAME=Aisha"]
+    if sys.platform != "win32":  # Windows has no 0600 mode
+        assert stat.S_IMODE(p.stat().st_mode) == 0o600
 
 
 def test_update_env_file_creates_and_rejects_newlines(tmp_path):
     p = tmp_path / "new" / "secrets.env"
     update_env_file(p, {"A": "1"})
-    assert p.read_text() == "A=1\n"
+    assert p.read_text(encoding="utf-8") == "A=1\n"
     try:
         update_env_file(p, {"A": "x\nB=2"})
     except ValueError:
@@ -39,7 +41,7 @@ def test_status_needed_until_everything_is_set(tmp_path):
     p = tmp_path / "s.env"
     s = load_settings(p)
     assert setup.status(s)["needed"] is True and setup.status(s)["default_base"].startswith("https://")
-    p.write_text(f"OPS_BOT_TOKEN={TOKEN}\nALLOWED_TELEGRAM_ID=5\nPOLITEMALL_USER=u\nPOLITEMALL_PASS=p\n")
+    p.write_text(f"OPS_BOT_TOKEN={TOKEN}\nALLOWED_TELEGRAM_ID=5\nPOLITEMALL_USER=u\nPOLITEMALL_PASS=p\n", encoding="utf-8")
     assert setup.status(load_settings(p))["needed"] is False
 
 

@@ -29,7 +29,7 @@ class WebChat:
 
     def _session(self) -> str | None:
         try:
-            s = json.loads(self.path.read_text())
+            s = json.loads(self.path.read_text(encoding="utf-8"))
         except (OSError, ValueError):
             return None
         if not s.get("id") or self.now() - s.get("at", 0) > IDLE_RESET.total_seconds():
@@ -38,7 +38,7 @@ class WebChat:
 
     def _remember(self, session_id: str) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        self.path.write_text(json.dumps({"id": session_id, "at": self.now()}))
+        self.path.write_text(json.dumps({"id": session_id, "at": self.now()}), encoding="utf-8")
 
     def reset(self) -> None:
         self.path.unlink(missing_ok=True)

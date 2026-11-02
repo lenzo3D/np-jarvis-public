@@ -41,5 +41,5 @@ def test_saved_strategy_is_not_mistaken_for_the_token_provider():
 
 def test_ops_builds_the_reader_with_the_saved_strategy():
     import pathlib
-    src = pathlib.Path("ops/main.py").read_text()
+    src = pathlib.Path("ops/main.py").read_text(encoding="utf-8")
     assert 'Outlook(sessions, strategy=db.get_setting("outlook_strategy"))' in src

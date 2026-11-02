@@ -69,3 +69,48 @@ async def test_refresh_confirmed_marks_removed_future_items_gone(db, env_file):
     await refresh_confirmed(s)
     assert store.get("bs:assignment:1044225:55").status == "gone"
     assert store.get("bs:assignment:1044225:40").status == "active"  # past: kept as history
+
+
+def test_kind_from_title_matches_whole_words_only():
+    from ops.deadline_sources import kind_from_title
+    for t in ("Photo contest entry", "Latest announcements", "Attest form", "Protest report briefing", "Examine the data",
+              "Detest"):
+        assert kind_from_title(t) == "other", t
+    assert kind_from_title("Test 1") == "test" and kind_from_title("Mid-term TEST") == "test"
+    assert kind_from_title("Quizzes week 3") == "quiz" and kind_from_title("Final Exam") == "exam"
+    assert kind_from_title("Exam-style practice") == "exam"
+
+
+def test_calendar_other_items_point_and_multi_day_stay_due_blocks_events_become_events():
+    events = [ev(1, "CA2 Reflection", "2026-11-10T15:59:00.000Z", "2026-11-10T15:59:00.000Z"),
+              ev(2, "MST week", "2026-11-08T16:00:00.000Z", "2026-11-20T15:59:00.000Z"),
+              ev(3, "Alumni talk", "2026-11-12T06:00:00.000Z", None),
+              ev(4, "Team huddle", "2026-11-12T06:00:00.000Z", "2026-11-12T07:00:00.000Z")]
+    out = {d.key: d for d in confirmed_from_calendar(events, {}, [])}
+    p, w, b, h = out["bs:cal:1"], out["bs:cal:2"], out["bs:cal:3"], out["bs:cal:4"]
+    assert not p.as_event and p.end_utc == "2026-11-10T15:59:00+00:00" and p.start_utc == "2026-11-10T15:29:00+00:00"
+    assert not w.as_event and w.end_utc == "2026-11-20T15:59:00+00:00" and w.start_utc == "2026-11-20T15:29:00+00:00"
+    assert b.as_event and b.start_utc == "2026-11-12T06:00:00+00:00" and b.end_utc is None
+    assert h.as_event and h.end_utc == "2026-11-12T07:00:00+00:00"
+
+
+async def test_existing_due_block_row_keeps_its_shape_when_brightspace_shows_a_same_day_range(db, env_file):
+    from core.deadlines import Deadline
+    s = Services(settings=load_settings(env_file), db=db, sessions=None, bs=FakeBS(), notifier=FakeNotifier(),
+                 clock=Clock(NOW))
+    s.bs.course_list = [Course(1043604, "26S2-73BKALY_012872", "X")]
+    s.bs.cal_events = [ev(1, "CA2 Reflection", "2026-11-10T01:00:00.000Z", "2026-11-10T15:59:00.000Z")]
+    store = DeadlineStore(db)
+    # stored before as_event existed: the old behaviour made every "other" item a due block (end-30min .. end)
+    old = Deadline(key="bs:cal:1", title="CA2 Reflection", course_code="26S2-73BKALY_012872", kind="other",
+                   start_utc="2026-11-10T15:29:00+00:00", end_utc="2026-11-10T15:59:00+00:00", all_day=False,
+                   source="brightspace", source_ref="", confidence="confirmed", quote="", as_event=False)
+    store.upsert(old, NOW)
+    before = db.conn.execute("select * from deadlines where key='bs:cal:1'").fetchone()
+    assert await refresh_confirmed(s) == 0
+    after = db.conn.execute("select * from deadlines where key='bs:cal:1'").fetchone()
+    assert tuple(before) == tuple(after) and not store.get("bs:cal:1").as_event
+    # a brand-new row of the same shape is an event
+    s.bs.cal_events = [ev(2, "CA3 Reflection", "2026-11-11T01:00:00.000Z", "2026-11-11T15:59:00.000Z")]
+    await refresh_confirmed(s)
+    assert store.get("bs:cal:2").as_event

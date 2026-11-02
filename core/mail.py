@@ -66,7 +66,8 @@ class MailStore:
 
     def upsert(self, m: Mail, category: str, now: datetime) -> bool:
         """Insert or refresh a message. Returns True when it was not stored before."""
-        existed = self.db.conn.execute("select 1 from emails where id=?", (m.id,)).fetchone() is not None
+        before = self.db.conn.execute("select subject, sender_name, sender_addr, body from emails where id=?", (m.id,)).fetchone()
+        existed = before is not None
         self.db.conn.execute(
             """insert into emails(id, received, sender_name, sender_addr, subject, preview, body, is_read,
                                   has_attachments, importance, web_link, conv_id, category, first_seen)
@@ -78,9 +79,10 @@ class MailStore:
              m.body, int(m.is_read), int(m.has_attachments), m.importance, m.web_link, m.conv_id, category,
              now.isoformat()))
         row = self.db.conn.execute("select subject, sender_name, sender_addr, body from emails where id=?", (m.id,)).fetchone()
-        self.db.conn.execute("delete from emails_fts where id=?", (m.id,))
-        self.db.conn.execute("insert into emails_fts(id, subject, sender, body) values (?,?,?,?)",
-                             (m.id, row["subject"] or "", f"{row['sender_name']} {row['sender_addr']}", row["body"] or ""))
+        if before is None or tuple(before) != tuple(row):  # unchanged mail: leave the search index alone (sweeps re-see many)
+            self.db.conn.execute("delete from emails_fts where id=?", (m.id,))
+            self.db.conn.execute("insert into emails_fts(id, subject, sender, body) values (?,?,?,?)",
+                                 (m.id, row["subject"] or "", f"{row['sender_name']} {row['sender_addr']}", row["body"] or ""))
         return not existed
 
     def get(self, mail_id: str) -> dict | None:
