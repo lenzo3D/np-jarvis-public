@@ -1,6 +1,7 @@
 import asyncio
 import json
 import sys
+from pathlib import Path
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -354,3 +355,11 @@ async def test_usage_cap_post_merges_and_rejects_bad_json(settings):
         assert r.status == 400
     finally:
         await c.close()
+
+
+def test_update_popup_markup_comes_before_the_script():
+    # app.js wires the popup's buttons when it loads; markup after the <script> tag would crash the whole panel
+    html = (Path(__file__).resolve().parent.parent / "ui" / "static" / "index.html").read_text(encoding="utf-8")
+    script = html.index('<script src="/static/app.js">')
+    for el_id in ("update-pop", "update-pop-apply", "update-pop-later", "update-pop-changes", "update-pop-notes"):
+        assert html.index(f'id="{el_id}"') < script, el_id

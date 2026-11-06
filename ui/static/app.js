@@ -760,7 +760,33 @@ async function checkUpdate() {
   try { after = sessionStorage.getItem("jarvis-update-result") || ""; } catch (e) { /* ignore */ }
   $("update-notes").textContent = after || (data.notes || []).join(" ");
   $("update-apply").hidden = !(data.ok && data.behind);
+  maybeUpdatePopup(data);
 }
+
+/* The popup: shown once per new version; "Later" hides it for 6 hours (or until a newer version arrives). */
+const UPDATE_SNOOZE_MS = 6 * 3600 * 1000;
+let updateSeen = "";
+function maybeUpdatePopup(data) {
+  if (!(data.ok && data.behind)) { $("update-pop").hidden = true; return; }
+  updateSeen = (data.changes || [])[0] + "|" + data.behind;
+  let snooze = {};
+  try { snooze = JSON.parse(localStorage.getItem("jarvis-update-snooze") || "{}"); } catch (e) { /* ignore */ }
+  if (snooze.id === updateSeen && Date.now() - (snooze.at || 0) < UPDATE_SNOOZE_MS) return;
+  if (!$("wizard").hidden) return;  // never on top of the first-run setup
+  fill($("update-pop-changes"), ...(data.changes || []).slice(0, 5).map((c) => el("li", {}, c)));
+  $("update-pop-notes").textContent = (data.notes || []).join(" ");
+  $("update-pop").hidden = false;
+  $("update-pop-apply").focus();
+}
+$("update-pop-later").addEventListener("click", () => {
+  try { localStorage.setItem("jarvis-update-snooze", JSON.stringify({ id: updateSeen, at: Date.now() })); } catch (e) { /* ignore */ }
+  $("update-pop").hidden = true;
+});
+$("update-pop-apply").addEventListener("click", () => {
+  $("update-pop").hidden = true;
+  $("update-apply").click();
+});
+document.addEventListener("keydown", (e) => { if (e.key === "Escape" && !$("update-pop").hidden) $("update-pop-later").click(); });
 $("update-check").addEventListener("click", checkUpdate);
 $("update-apply").addEventListener("click", async () => {
   $("update-apply").disabled = true;
