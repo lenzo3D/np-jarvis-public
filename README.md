@@ -10,7 +10,9 @@ it in plain language, from Telegram or from a local control panel.
 ## What it does
 
 - **Deadlines and reminders.** Reads assignments from POLITEMall, reminds you before they are due, and keeps them on
-  your Google Calendar (optional). Dates it only guesses are marked tentative. For an assignment you have not
+  your Google Calendar (optional). Dates it only guesses are marked tentative. Ask in chat ("add the meeting with
+  Mr Yap on Tuesday at 4pm to my calendar") and it puts the event on your own calendar; it never invites anyone, and
+  you get a Telegram note for every event it adds or removes. For an assignment you have not
   handed in, reminders come 3 days, 1 day, 6 hours, 3 hours, 1 hour and 30 minutes before it is due, and stop as
   soon as POLITEMall shows your submission. The last 6 hours ignore quiet hours and mutes (only `/pause` stops
   them). Buttons: Do it, Snooze 1h, and "I submitted elsewhere". If a deadline passes unsubmitted you get one

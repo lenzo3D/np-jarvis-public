@@ -23,9 +23,13 @@ def test_command_has_full_school_tools_and_workspace_access(env_file):
     cmd = build_agent_command("do my investments tutorial", s, session_id=None)
     allowed = cmd[cmd.index("--allowedTools") + 1]
     assert "mcp__school" in allowed.split(",")
-    assert f"Write({s.workspace_dir}/**)" in allowed and "Skill" in allowed and "Bash(python3:*)" in allowed
+    assert f"Edit(/{s.workspace_dir}/**)" in allowed and "Skill" in allowed and "Bash(python3:*)" in allowed
     denied = cmd[cmd.index("--disallowedTools") + 1]
-    assert "Bash(sudo:*)" in denied and f"Read({s.state_dir}/**)" in denied and "secrets.env" in denied
+    assert "Bash(sudo:*)" in denied and f"Read(/{s.state_dir}/**)" in denied and "secrets.env" in denied
+    # every path rule is absolute in Claude Code's form ("//..."); a single "/" silently never matches
+    for rule in allowed.split(",") + denied.split(","):
+        if "(" in rule and rule.split("(", 1)[1].startswith("/"):
+            assert rule.split("(", 1)[1].startswith("//"), rule
     cfg = json.loads(cmd[cmd.index("--mcp-config") + 1])
     assert "SCHOOL_MCP_READONLY" not in cfg["mcpServers"]["school"]["env"]
     assert "--strict-mcp-config" in cmd and "--resume" not in cmd

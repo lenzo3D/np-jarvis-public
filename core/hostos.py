@@ -16,7 +16,7 @@ import signal
 import subprocess
 import sys
 import time
-from pathlib import Path
+from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Callable, Iterator
 
 log = logging.getLogger(__name__)
@@ -80,9 +80,17 @@ def sqlite_ro_uri(path: str | os.PathLike) -> str:
     return Path(path).absolute().as_uri() + "?mode=ro"
 
 
-def rule_path(path: str | os.PathLike) -> str:
-    """Path as it goes inside a Claude Code permission rule, which uses forward slashes on every OS."""
-    return Path(path).as_posix()
+def rule_path(path: str | os.PathLike, windows: bool | None = None) -> str:
+    """Path as it goes inside a Claude Code permission rule. An absolute path needs a leading "//": a single "/" means
+    relative to the settings file, so such a rule silently never matches (allow rules do nothing, deny rules block
+    nothing). Windows paths become //c/Users/..., the POSIX form Claude Code matches against."""
+    if _win(windows):
+        w = PureWindowsPath(path)
+        if w.drive and w.root:
+            return "//" + w.drive.rstrip(":").lower() + "/" + "/".join(w.parts[1:])
+        return w.as_posix()
+    posix = PurePosixPath(os.fspath(path)).as_posix()
+    return "/" + posix if posix.startswith("/") and not posix.startswith("//") else posix
 
 
 def secrets_mode_is_private(path: Path, windows: bool | None = None) -> bool:

@@ -184,6 +184,30 @@ async def set_project_task_status(task_id: int, status: str) -> dict:
 
 
 @server.tool()
+async def add_to_my_calendar(title: str, start: str, end: str = "", all_day: bool = False, kind: str = "event",
+                             note: str = "") -> dict:
+    """Put an event on the user's own calendar (Google Calendar via JARVIS's sync, plus the panel's Calendar tab).
+    Use it when the user asks to add, save or schedule something, e.g. a meeting agreed in a chat.
+    start/end: ISO date-time in Singapore time, e.g. "2026-11-10T16:00" (end optional: 1 hour is assumed);
+    all_day=true with start "2026-11-10" for a whole day. kind: "meeting" or "event". note: venue or details.
+    Only the user's own calendar is touched: no invitation is sent to anyone. Tell the user what was added."""
+    return await ops.post("/calendar/mine", {"title": title, "start": start, "end": end, "all_day": all_day,
+                                             "kind": kind, "note": note})
+
+
+@server.tool()
+async def get_my_events() -> list | dict:
+    """Events the user added to their calendar through JARVIS chat (with their keys, for remove_from_my_calendar)."""
+    return await ops.get("/calendar/mine")
+
+
+@server.tool()
+async def remove_from_my_calendar(key: str) -> dict:
+    """Remove an event added with add_to_my_calendar (key from get_my_events). Other calendar entries cannot be removed."""
+    return await ops.post("/calendar/mine/remove", {"key": key})
+
+
+@server.tool()
 async def submit_assignment(course: str, folder_id: int, file_path: str, comment: str = "") -> dict:
     """PROPOSE submitting a workspace file to an assignment dropbox. Does not submit: the user must approve
     it in the Ops bot. Only use when the user explicitly asked to submit."""
@@ -223,7 +247,8 @@ async def send_file_to_me(path: str, caption: str = "") -> dict:
 
 
 WRITE_TOOLS = ["submit_assignment", "post_discussion", "send_teams_message", "send_file_to_me", "download_file",
-               "set_project_task_status"]  # the last one only edits JARVIS's own list, but a read-only session must not change anything
+               "set_project_task_status", "add_to_my_calendar", "remove_from_my_calendar"]
+# the last three only change JARVIS's own list and the user's own calendar, but a read-only session must not change anything
 if os.environ.get("SCHOOL_MCP_READONLY") == "1":
     # Question-answering sessions: the write/propose tools simply don't exist.
     for _name in WRITE_TOOLS:

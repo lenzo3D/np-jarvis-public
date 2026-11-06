@@ -35,7 +35,15 @@ def test_default_transport():
 def test_sqlite_uri_and_rule_path(tmp_path):
     uri = hostos.sqlite_ro_uri(tmp_path / "a b.db")
     assert uri.startswith("file:///") and uri.endswith("a%20b.db?mode=ro")
-    assert hostos.rule_path(Path("a") / "b") == "a/b"
+    assert hostos.rule_path("a/b", windows=False) == "a/b"
+
+
+def test_rule_path_is_absolute_in_claude_code_form():
+    # A single leading "/" is relative to the settings file in Claude Code rules, so it would never match.
+    assert hostos.rule_path("/Users/me/jarvis/state", windows=False) == "//Users/me/jarvis/state"
+    assert hostos.rule_path("//already/abs", windows=False) == "//already/abs"
+    assert hostos.rule_path("C:\\Users\\Me\\jarvis\\state", windows=True) == "//c/Users/Me/jarvis/state"
+    assert hostos.rule_path("rel\\dir", windows=True) == "rel/dir"
 
 
 # ---------- locks ----------

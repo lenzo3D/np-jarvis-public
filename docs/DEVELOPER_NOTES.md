@@ -284,6 +284,25 @@ note when it goes green. Chat does not retry a fresh session on an auth error. T
 `scripts/claude_login.py` (`claude auth login` with an open stdin pipe, then `auth status`) and resets the setting
 to "0" (grey until the next check).
 
+### Permission rules need "//" for absolute paths
+
+In Claude Code permission rules a path starting with a single "/" is relative to the settings file, so
+`Read(/Users/.../state/**)` silently never matches: allow rules grant nothing and deny rules block nothing. Verified on
+2026-11-06 with `claude -p`: `Edit(/abs/**)` was denied a Write and `Read(/abs/**)` did not block a read, while the
+`//abs` forms worked. `hostos.rule_path` now returns `//Users/...` (Windows: `//c/Users/...`); Write is covered by
+the Edit rule. Before this fix the chat agent could not save any file in the workspace, and the deny rules for
+`state/` and `secrets.env` were not in force (Bash(python3) could read them anyway; see README "What the chat agent
+can reach").
+
+### Your own calendar events (chat)
+
+`add_to_my_calendar` / `get_my_events` / `remove_from_my_calendar` (MCP, in WRITE_TOOLS) call `/calendar/mine` on the
+Ops API. `core/my_events.py` stores them as deadlines with key `mine:<hash>`, source "mine", confirmed, as_event, so
+the normal Google sync adds and removes them (the route runs `deadline_jobs.calendar_sync` straight away) and the
+1 day / 3 hour Telegram reminders cover them. Times without an offset are Singapore time; links are stripped; the
+start must be within about a year; only `mine:` rows can be removed. Every add and remove sends a Telegram note.
+Only the user's own calendar is written: no attendees, no invitations, so no approval card.
+
 ### Updating
 
 Overview tab, Updates card: checks GitHub every 30 minutes (`ui/updater.py`). Update and restart brings the copy to

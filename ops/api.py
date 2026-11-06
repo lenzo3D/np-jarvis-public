@@ -1,8 +1,9 @@
 """Local HTTP API used by school_mcp (which runs as the Claude user): a Unix socket on macOS/Linux, or
 127.0.0.1 with a random bearer token on Windows (see core/localapi.py).
 
-Read endpoints + propose_action + send_file, plus one local-only write: marking a project-group task done/dropped
-(/project/tasks/status), which changes only JARVIS's own list and sends nothing anywhere. There is deliberately NO
+Read endpoints + propose_action + send_file, plus local writes that send nothing to other people: marking a
+project-group task done/dropped (/project/tasks/status), and adding or removing the user's own calendar events
+(/calendar/mine), which go only to the user's own Google Calendar through the normal deadline sync. There is deliberately NO
 approve or execute route: approval happens only through the Ops bot buttons.
 """
 from __future__ import annotations
@@ -295,6 +296,68 @@ class Api:
         pt.sync_deadlines(self.s.settings, self.s.db, now)  # same calendar refresh as the panel
         return web.json_response({"id": task_id, "status": status})
 
+    # ---------- the user's own calendar events (asked for in chat; synced like deadlines) ----------
+    async def _json_body(self, req) -> dict:
+        try:
+            body = await req.json()
+        except ValueError:
+            body = None
+        if not isinstance(body, dict):
+            raise web.HTTPBadRequest(text=json.dumps({"error": "a JSON object is required"}), content_type="application/json")
+        return body
+
+    async def _sync_calendar(self) -> str:
+        from ops import deadline_jobs
+
+        try:
+            rep = await deadline_jobs.calendar_sync(self.s)
+        except Exception:  # noqa: BLE001 - the row is saved; the 15-minute sync retries
+            log.warning("calendar sync after a chat change failed", exc_info=True)
+            return "saved; Google Calendar will be updated within 15 minutes"
+        return "done" if rep is not None else "Google Calendar is not connected, so it is only in JARVIS's Calendar tab"
+
+    def _event_json(self, d) -> dict:
+        when = f"{d.start_utc[:10]} (all day)" if d.all_day else fmt_dt(parse_iso(d.start_utc), self.s.settings.tz)
+        if d.end_utc and not d.all_day:
+            when += f" to {fmt_dt(parse_iso(d.end_utc), self.s.settings.tz)}"
+        return {"key": d.key, "title": d.title, "when": when, "kind": "meeting" if d.kind == "meeting" else "event",
+                "note": d.quote}
+
+    async def post_my_event(self, req):
+        from core import my_events
+
+        body = await self._json_body(req)
+        now = self.s.clock()
+        try:
+            d = my_events.build(str(body.get("title") or ""), str(body.get("start") or ""), now, self.s.settings.tz,
+                                end=body.get("end") or None, all_day=bool(body.get("all_day")),
+                                kind=str(body.get("kind") or "event"), note=str(body.get("note") or ""))
+        except my_events.EventError as e:
+            raise web.HTTPBadRequest(text=json.dumps({"error": str(e)}), content_type="application/json")
+        my_events.add(self.s.db, d, now)
+        google = await self._sync_calendar()
+        out = self._event_json(d)
+        await self.s.notifier.send(f"Added to your calendar: {d.title}, {out['when']}.")
+        return web.json_response({**out, "google_calendar": google})
+
+    async def get_my_events(self, req):
+        from core import my_events
+
+        return web.json_response([self._event_json(d) for d in my_events.listing(self.s.db)])
+
+    async def post_my_event_remove(self, req):
+        from core import my_events
+        from core.deadlines import DeadlineStore
+
+        key = str((await self._json_body(req)).get("key") or "")
+        d = DeadlineStore(self.s.db).get(key)
+        if not my_events.remove(self.s.db, key):
+            raise web.HTTPBadRequest(text=json.dumps({"error": "unknown key: only events added from chat can be removed (see get_my_events)"}),
+                                     content_type="application/json")
+        google = await self._sync_calendar()
+        await self.s.notifier.send(f"Removed from your calendar: {d.title}.")
+        return web.json_response({"removed": key, "google_calendar": google})
+
     # ---------- school email (read-only; text is third-party content) ----------
     def _mail_json(self, m: dict, body: bool = False) -> dict:
         tz = self.s.settings.tz
@@ -467,6 +530,9 @@ def make_app(services, token: str | None = None) -> web.Application:
     r.add_get("/group/recent", api.get_group_recent)
     r.add_get("/project/tasks", api.get_project_tasks)
     r.add_post("/project/tasks/status", api.post_project_task_status)
+    r.add_get("/calendar/mine", api.get_my_events)
+    r.add_post("/calendar/mine", api.post_my_event)
+    r.add_post("/calendar/mine/remove", api.post_my_event_remove)
     r.add_get("/deadlines", api.get_deadlines)
     r.add_get("/material/search", api.get_material_search)
     r.add_get("/material/get", api.get_material)

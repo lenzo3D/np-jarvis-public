@@ -251,7 +251,8 @@ async def _deadline_one(ctx, d, force: bool) -> None:
         return
     verb = "due" if is_due(d.kind, d.as_event) else "on"
     head = "[Urgent] " if urgent else "Reminder: "
-    await ctx.notifier.send(f"{head}{d.course_code or 'Course'}: \"{d.title}\" {verb} {fmt_dt(moment, tz)} "
+    where = d.course_code or ("Your calendar" if d.source == "mine" else "Course")
+    await ctx.notifier.send(f"{head}{where}: \"{d.title}\" {verb} {fmt_dt(moment, tz)} "
                             f"({time_left(left)} left).")
     db.conn.execute("insert into deadline_reminders values (?,?,?) on conflict(key) do update set "
                     "moment=excluded.moment, sent_json=excluded.sent_json",

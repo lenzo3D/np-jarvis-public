@@ -15,7 +15,7 @@ KIND_LABEL = {"assignment": "Assignment due", "homework": "Homework due", "quiz"
 CONFIRMED_ICON, TENTATIVE_ICON = "\U0001F4CC", "\u2753"  # pushpin: certain; question mark: unverified
 SOURCE_LABEL = {"brightspace": "POLITEMall", "announcement": "POLITEMall announcement",
                 "document": "course document", "teams": "Teams", "group": "Telegram group", "email": "School email",
-                "project": "Project group chat"}
+                "project": "Project group chat", "mine": "You asked JARVIS to add it"}
 
 
 def short_course(name: str, code: str | None) -> str:
@@ -51,8 +51,9 @@ def event_body(d: Deadline, course_name: str, tz) -> dict:
     # text read by a model from other people's messages: no links (a calendar invite can be a phishing vehicle)
     title = clean_text(d.title, urls=True) if tentative else d.title
     quote = clean_text(d.quote, urls=True) if tentative else d.quote
-    label = "Project group" if d.source == "project" else short_course(course_name, d.course_code)
-    summary = (f"{prefix} {title}" if d.source == "project" else f"{prefix} {label}: {title}")[:250]
+    own = d.source in ("project", "mine")
+    label = {"project": "Project group", "mine": "Personal"}.get(d.source) or short_course(course_name, d.course_code)
+    summary = (f"{prefix} {title}" if own else f"{prefix} {label}: {title}")[:250]
     if d.all_day:
         day = date.fromisoformat(d.start_utc[:10])
         start, end = {"date": day.isoformat()}, {"date": (day + timedelta(days=1)).isoformat()}
@@ -71,7 +72,7 @@ def event_body(d: Deadline, course_name: str, tz) -> dict:
     if d.confidence != "confirmed":
         lines.append(f"{TENTATIVE_ICON} Tentative: read from text by JARVIS — double-check the date.")
     if quote:
-        lines.append(f'Quote: "{quote[:300]}"')
+        lines.append(f"Note: {quote[:300]}" if d.source == "mine" else f'Quote: "{quote[:300]}"')
     if d.source_ref.startswith("http"):
         lines.append(d.source_ref)
     lines.append("Added by JARVIS — edits to this event may be overwritten; delete it to stop JARVIS re-adding it.")
