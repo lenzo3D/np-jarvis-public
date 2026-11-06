@@ -313,7 +313,7 @@ async def test_state_endpoint_includes_connections(settings):
     c = await client(settings, supervisor(settings))
     try:
         body = await (await c.get("/api/state", headers=H)).json()
-        assert [x["id"] for x in body["connections"]] == ["brightspace", "teams", "google", "telegram", "outlook"]
+        assert [x["id"] for x in body["connections"]] == ["brightspace", "teams", "google", "telegram", "outlook", "claude"]
     finally:
         await c.close()
 

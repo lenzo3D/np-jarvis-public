@@ -16,6 +16,7 @@ JOBS = {
     "login_brightspace": {"label": "Log in to POLITEMall", "cmd": [PY, "-m", "core.auth", "login", "brightspace", "--show"], "exclusive": True, "clears": "auth_prompted:brightspace"},
     "login_teams": {"label": "Log in to Teams", "cmd": [PY, "-m", "core.auth", "login", "teams", "--show"], "exclusive": True, "clears": "auth_prompted:teams"},
     "login_outlook": {"label": "Log in to Outlook email", "cmd": [PY, "-m", "core.auth", "login", "outlook", "--show"], "exclusive": True, "clears": "auth_prompted:outlook"},
+    "login_claude": {"label": "Sign in to Claude", "cmd": [PY, "scripts/claude_login.py"], "clears": "claude_auth"},
     "login_google": {"label": "Connect Google Calendar", "cmd": [PY, "-m", "core.gcal", "login"], "clears": "gcal_warned"},
     "probe_brightspace": {"label": "Check POLITEMall connection", "cmd": [PY, "scripts/probe_brightspace.py", "--no-write"], "exclusive": True},
     "probe_teams": {"label": "Check Teams connection", "cmd": [PY, "scripts/probe_teams.py"], "exclusive": True},

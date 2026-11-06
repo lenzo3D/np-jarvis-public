@@ -129,6 +129,7 @@ def connections(settings, ops_mode: str, now: datetime | None = None) -> list[di
                 "last_ok": None, "action": "login_google" if state == "login" else None, "relogin": "login_google"})
     out.append(_telegram_connection(settings, conn, running))
     out.append(_outlook_connection(settings, conn, running, now))
+    out.append(_claude_connection(conn, running, now))
     if conn is not None:
         conn.close()
     return out
@@ -185,6 +186,32 @@ def _outlook_connection(settings, conn, running: bool, now: datetime) -> dict:
         state, detail = "live", f"Reading your inbox ({count} messages stored). Last checked {_ago(now - last_ok)}."
     return {"id": "outlook", "name": "Outlook email", "state": state, "color": COLORS[state], "detail": detail,
             "last_ok": last_ok.isoformat() if last_ok else None, "action": action, "action_label": label, "relogin": "login_outlook"}
+
+
+def _claude_connection(conn, running: bool, now: datetime) -> dict:
+    """Claude Code's own login: JARVIS records it after every Claude call and checks it every 10 minutes."""
+    try:
+        auth = json.loads(_setting(conn, "claude_auth") or "{}") if conn is not None else {}
+    except ValueError:
+        auth = {}
+    auth = auth if isinstance(auth, dict) else {}  # "0" after the Sign in button: wait for the next check
+    try:
+        at = datetime.fromisoformat(auth["at"])
+    except (KeyError, TypeError, ValueError):
+        at = None
+    action = None
+    if auth.get("ok") is False:
+        state, action = "login", "login_claude"
+        detail = "Claude is signed out on this computer, so chat, briefings and summaries stop. Sign in again."
+    elif auth.get("ok") is True:
+        state, detail = "live", "Signed in. Chat, briefings and summaries work." + (f" Last confirmed {_ago(now - at)}." if at else "")
+    elif not running:
+        state, detail = "offline", "JARVIS is not running, so the Claude sign-in cannot be checked."
+    else:
+        state, detail = "stale", "Waiting for the first check (within 10 minutes)."
+    return {"id": "claude", "name": "Claude", "state": state, "color": COLORS[state], "detail": detail,
+            "last_ok": at.isoformat() if at and auth.get("ok") else None, "action": action,
+            "action_label": "Sign in" if action else None, "relogin": "login_claude"}
 
 
 def _telegram_connection(settings, conn, running: bool) -> dict:

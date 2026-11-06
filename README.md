@@ -94,7 +94,8 @@ Then open the **Logins & Tools** tab and press **Connect everything**. It signs 
 one after the other (you do the sign-in and any phone approval yourself; Microsoft's number is also sent to your
 Telegram), then checks that each one really works and prints a summary. JARVIS restarts by itself afterwards. The
 indicators next to the clock turn green when everything is live. Press the same button again any time something
-turns red.
+turns red. The **Claude** light shows whether Claude Code is still signed in; if it turns red (Telegram tells you too),
+press its **Sign in** button and approve in the browser.
 
 Optional extras, each from the panel:
 

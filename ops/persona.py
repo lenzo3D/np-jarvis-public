@@ -89,6 +89,17 @@ def apology(s, detail: str) -> str:
     return f"My apologies, {address(s)}. That didn't go to plan: {detail}"
 
 
+# ---- Claude sign-in ----
+def claude_signed_out(s) -> str:
+    return (f"{address(s)}, Claude has signed me out on this computer, so I cannot chat, brief you or summarise until you "
+            "sign in again. Open the control panel and press Sign in on the Claude light (or run: claude auth login). "
+            "Deadline checks and reminders carry on meanwhile.")
+
+
+def claude_signed_in(s) -> str:
+    return f"Claude sign-in restored, {address(s)}. Chat, briefings and summaries are back."
+
+
 # ---- usage cap ----
 def usage_warning(s, kind: str, level: int, used: float, limit: float) -> str:
     from core import usagecap

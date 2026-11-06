@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from apscheduler.triggers.cron import CronTrigger
 
-from ops import briefing, deadline_jobs, mail_jobs, project_tasks, reminders, usage_watch, watcher
+from ops import briefing, claude_watch, deadline_jobs, mail_jobs, project_tasks, reminders, usage_watch, watcher
 
 TZ = "Asia/Singapore"
 
@@ -42,6 +42,8 @@ def register(sched, services) -> None:
                   args=[services], id="deadlines_confirmed", **opts)
     sched.add_job(deadline_jobs.extract_job, CronTrigger(minute=40, hour="7-23", timezone=TZ),
                   args=[services], id="deadlines_extract", **opts)
+    sched.add_job(claude_watch.check, CronTrigger(minute="3,13,23,33,43,53", timezone=TZ),
+                  args=[services], id="claude_watch", **opts)
     sched.add_job(save_sessions, CronTrigger(minute="*/30", timezone=TZ), args=[services], id="save_sessions", **opts)
     sched.add_job(expire_actions, CronTrigger(minute=30, timezone=TZ), args=[services], id="expire_actions", **opts)
 
@@ -55,7 +57,8 @@ def register_boot(sched, services, delay_s: float = 20.0) -> None:
     from apscheduler.triggers.date import DateTrigger
 
     start = datetime.now(ZoneInfo(TZ)) + timedelta(seconds=delay_s)
-    jobs = [(watcher.sweep_brightspace, "boot_bs"), (watcher.sweep_teams, "boot_teams"), (mail_jobs.sweep_outlook, "boot_mail")]
+    jobs = [(watcher.sweep_brightspace, "boot_bs"), (watcher.sweep_teams, "boot_teams"), (mail_jobs.sweep_outlook, "boot_mail"),
+            (claude_watch.check, "boot_claude")]
     for i, (fn, job_id) in enumerate(jobs):
         sched.add_job(fn, DateTrigger(run_date=start + timedelta(seconds=15 * i), timezone=TZ), args=[services], id=job_id,
                       replace_existing=True, misfire_grace_time=300, max_instances=1)

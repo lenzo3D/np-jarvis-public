@@ -66,7 +66,7 @@ def test_boot_checks_are_scheduled_shortly_after_start(env_file):
             added.append((fn.__name__, kw["id"], trigger.run_date, kw["replace_existing"]))
 
     scheduler.register_boot(FakeSched(), object(), delay_s=20)
-    assert [(n, i) for n, i, _, _ in added] == [("sweep_brightspace", "boot_bs"), ("sweep_teams", "boot_teams"), ("sweep_outlook", "boot_mail")]
+    assert [(n, i) for n, i, _, _ in added] == [("sweep_brightspace", "boot_bs"), ("sweep_teams", "boot_teams"), ("sweep_outlook", "boot_mail"), ("check", "boot_claude")]
     assert all(r for *_, r in added)
     soonest, latest = added[0][2], added[-1][2]
     assert 0 < (soonest - datetime.now(soonest.tzinfo)).total_seconds() <= 25 and latest > soonest

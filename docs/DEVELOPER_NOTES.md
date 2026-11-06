@@ -273,6 +273,17 @@ overdue or starting; grey when JARVIS is stopped; red when the session expired (
 failed in a row, or no login exists. Login buttons only appear on red; the Tools tab shows them as "Log in again" when
 green. Google Calendar is green when its token exists and `gcal_warned` is not set.
 
+**Claude light.** Claude Code's own login can expire (seen: "OAuth session expired and could not be refreshed"), which
+silently breaks chat, briefings and summaries. `claude_runner.claude_error()` turns the CLI's login errors
+(`AUTH_MARKERS`, matched on CLI error text only) into `ClaudeAuthError` with a plain "sign in again" message, and both
+processes record the state in the `claude_auth` setting (`{"ok", "at", "detail"}`; any successful call writes ok,
+same-state rewrites at most every 10 min). `ops/claude_watch.py` runs at boot and every 10 min: `claude auth status`
+(no tokens) marks signed-out at once; when it says signed in but the stored state is red, one tiny haiku call confirms
+before turning green. It sends one Telegram alert when the light goes red (`claude_auth_alerted`) and one "restored"
+note when it goes green. Chat does not retry a fresh session on an auth error. The tile's **Sign in** button runs
+`scripts/claude_login.py` (`claude auth login` with an open stdin pipe, then `auth status`) and resets the setting
+to "0" (grey until the next check).
+
 ### Updating
 
 Overview tab, Updates card: checks GitHub every 30 minutes (`ui/updater.py`). Update and restart brings the copy to

@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import AsyncIterator, Callable
 
 from ops.chat_agent import IDLE_RESET, stream_claude
-from ops.claude_runner import ClaudeError, labelled
+from ops.claude_runner import ClaudeAuthError, ClaudeError, labelled
 from ops import persona
 from ops.textfmt import plain
 
@@ -68,10 +68,11 @@ class WebChat:
             try:
                 async for ev in self._once(text, session):
                     yield ev
-            except ClaudeError:
-                if not session:
+            except ClaudeError as e:
+                if not session or isinstance(e, ClaudeAuthError):
                     raise
                 async for ev in self._once(text, None):  # the old conversation is gone: start fresh
                     yield ev
         except Exception as e:  # noqa: BLE001
-            yield {"type": "error", "text": f"{type(e).__name__}: {e}"[:600]}
+            text = str(e) if isinstance(e, ClaudeAuthError) else f"{type(e).__name__}: {e}"
+            yield {"type": "error", "text": text[:600]}

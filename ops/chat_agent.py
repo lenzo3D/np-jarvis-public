@@ -17,7 +17,7 @@ from typing import AsyncIterator
 
 from core import hostos, localapi, usagecap
 from ops import claude_runner, persona
-from ops.claude_runner import ClaudeError, _base_cmd
+from ops.claude_runner import ClaudeAuthError, ClaudeError, _base_cmd
 
 log = logging.getLogger(__name__)
 REPO = Path(__file__).resolve().parent.parent
@@ -85,12 +85,12 @@ async def stream_claude(s, prompt: str, session_id: str | None) -> AsyncIterator
             elif ev.get("type") == "result":
                 usage = claude_runner.usage_from_result(ev)
                 if ev.get("is_error"):
-                    raise ClaudeError(str(ev.get("result") or ev.get("subtype"))[:500])
+                    raise claude_runner.claude_error(str(ev.get("result") or ev.get("subtype"))[:500])
                 ok = True
                 yield "result", str(ev.get("result") or "")
         await proc.wait()
         if proc.returncode:
-            raise ClaudeError((await stderr_task).decode(errors="replace")[-500:] or f"exit {proc.returncode}")
+            raise claude_runner.claude_error((await stderr_task).decode(errors="replace")[-500:] or f"exit {proc.returncode}")
     except asyncio.TimeoutError as e:
         raise ClaudeError("took longer than 30 minutes") from e
     finally:
@@ -162,15 +162,16 @@ class ChatAgent:
         try:
             try:
                 answer = await self._stream(prompt, session, msg)
-            except ClaudeError:
-                if not session:
+            except ClaudeError as e:
+                if not session or isinstance(e, ClaudeAuthError):
                     raise
                 log.warning("could not resume conversation %s; starting fresh", session)
                 answer = await self._stream(prompt, None, msg)
             await self.ctx.notifier.send(answer)
         except Exception as e:  # noqa: BLE001
             log.exception("chat agent failed")
-            await self.ctx.notifier.send(persona.apology(self.ctx.settings, f"{type(e).__name__}: {e}")[:1000])
+            detail = str(e) if isinstance(e, ClaudeAuthError) else f"{type(e).__name__}: {e}"
+            await self.ctx.notifier.send(persona.apology(self.ctx.settings, detail)[:1000])
 
     def _run_claude(self, prompt: str, session_id: str | None):
         return stream_claude(self.ctx.settings, prompt, session_id)
