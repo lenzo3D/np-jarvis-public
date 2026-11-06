@@ -210,3 +210,34 @@ async def test_check_failures_are_reported_as_json_not_a_500(env_file):
         assert r.status == 200 and body["ok"] is False and "RuntimeError: kaput" in body["message"]
     finally:
         await c.close()
+
+
+async def test_code_changed_on_disk_without_an_update_asks_for_a_restart(repos, tmp_path):
+    mac, dev = repos
+    started = git(mac, "rev-parse", "--short", "HEAD")
+    up = Updater(mac, running=started)
+    assert not (await up.check())["restart_needed"]
+    publish(dev, "app.py", "two\n", "Calendar tool")
+    git(mac, "pull", "-q", "--ff-only", "origin", "main")  # merged straight into this folder, panel not restarted
+    st = await up.check()
+    assert st["ok"] and st["behind"] == 0 and st["restart_needed"]
+    assert st["changes"] == ["Calendar tool"] and "Restart to finish updating" in st["message"]
+    res = await up.apply()
+    assert res["ok"] and res["restart"]
+
+
+@needs_shebang
+async def test_restart_only_update_installs_changed_dependencies(repos, tmp_path):
+    mac, dev = repos
+    py, log = fake_pip(tmp_path)
+    up = Updater(mac, python=py, running=git(mac, "rev-parse", "--short", "HEAD"))
+    publish(dev, "pyproject.toml", "v2\n", "New dependency")
+    git(mac, "pull", "-q", "--ff-only", "origin", "main")
+    res = await up.apply()
+    assert res["ok"] and res["restart"] and "pip install" in log.read_text(encoding="utf-8")
+
+
+async def test_unknown_running_version_never_asks_for_a_restart(repos):
+    mac, _ = repos
+    assert not (await Updater(mac, running="dev").check())["restart_needed"]
+    assert not (await Updater(mac).check())["restart_needed"]

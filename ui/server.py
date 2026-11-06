@@ -356,7 +356,7 @@ def make_app(settings, supervisor: OpsSupervisor, chat: WebChat | None = None, j
              port: int = 8765, updater: Updater | None = None, on_restart=None,
              calendar: CalendarView | None = None, db: DB | None = None,
              tglogin: TelegramLogin | None = None, env_file=None) -> web.Application:
-    panel = Panel(settings, supervisor, chat or WebChat(settings), jobs or Jobs(), updater or Updater(), on_restart,
+    panel = Panel(settings, supervisor, chat or WebChat(settings), jobs or Jobs(), updater or Updater(running=VERSION), on_restart,
                   calendar, db, tglogin, env_file)
     app = web.Application(middlewares=[make_middleware(port)])
     r = app.router

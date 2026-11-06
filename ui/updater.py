@@ -32,9 +32,17 @@ async def _run(*cmd: str, cwd: Path, timeout: float) -> tuple[int, str]:
 
 
 class Updater:
-    def __init__(self, repo: Path = REPO, remote: str = "origin", python: str = sys.executable):
-        self.repo, self.remote, self.python = repo, remote, python
+    def __init__(self, repo: Path = REPO, remote: str = "origin", python: str = sys.executable, running: str | None = None):
+        """running: the commit this panel process started with. When the code on disk moved on without an update
+        (for example changes merged straight into this folder), check() says a restart is needed."""
+        self.repo, self.remote, self.python, self.running = repo, remote, python, running
         self._lock = asyncio.Lock()
+
+    async def _restart_needed(self) -> tuple[bool, str]:
+        code, head = await self._git("rev-parse", "HEAD")
+        if code != 0 or not self.running or self.running == "dev":
+            return False, ""
+        return not head.startswith(self.running), head[:7]
 
     async def _git(self, *args: str, timeout: float = GIT_TIMEOUT) -> tuple[int, str]:
         return await _run("git", *args, cwd=self.repo, timeout=timeout)
@@ -42,7 +50,7 @@ class Updater:
     async def check(self) -> dict:
         """Fetch and compare with the remote branch. Never changes any file."""
         info = {"ok": False, "branch": None, "behind": 0, "ahead": 0, "dirty": False, "dirty_files": [], "changes": [],
-                "notes": [], "message": ""}
+                "notes": [], "message": "", "restart_needed": False}
         if not (self.repo / ".git").exists():
             info["message"] = "This folder is not a git checkout, so it cannot update itself."
             return info
@@ -65,6 +73,11 @@ class Updater:
             info["changes"] = (await self._git("log", "--format=%s", f"HEAD..{remote}", "-n", "15"))[1].splitlines()
         info["ok"] = True
         info["message"] = (f"{info['behind']} update(s) available." if info["behind"] else "JARVIS is up to date.")
+        info["restart_needed"], on_disk = await self._restart_needed()
+        if info["restart_needed"] and not info["behind"]:
+            info["changes"] = (await self._git("log", "--format=%s", f"{self.running}..HEAD", "-n", "15"))[1].splitlines()
+            info["message"] = (f"A newer version ({on_disk}) is already on this computer, but JARVIS is still running "
+                               f"{self.running}. Restart to finish updating.")
         if info["behind"]:
             if info["branch"] != BRANCH:
                 info["notes"].append(f"This copy is on branch '{info['branch']}'. It will switch to '{BRANCH}'.")
@@ -91,6 +104,15 @@ class Updater:
             st = await self.check()
             if not st["ok"]:
                 return {"ok": False, "message": st["message"], "restart": False}
+            if not st["behind"] and st["restart_needed"]:
+                _, names = await self._git("diff", "--name-only", self.running, "HEAD")
+                if "pyproject.toml" in names.splitlines():
+                    code, out = await _run(self.python, "-m", "pip", "install", "-q", "-e", str(self.repo),
+                                           cwd=self.repo, timeout=PIP_TIMEOUT)
+                    if code != 0:
+                        return {"ok": False, "restart": False,
+                                "message": f"Installing dependencies for the new version failed: {out[-300:]}"}
+                return {"ok": True, "restart": True, "message": "Restarting to load the new version."}
             if not st["behind"]:
                 return {"ok": True, "restart": False, "message": "Already up to date."}
             fail = lambda msg: {"ok": False, "restart": False, "message": msg}  # noqa: E731

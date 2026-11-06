@@ -759,7 +759,9 @@ async function checkUpdate() {
   let after = "";
   try { after = sessionStorage.getItem("jarvis-update-result") || ""; } catch (e) { /* ignore */ }
   $("update-notes").textContent = after || (data.notes || []).join(" ");
-  $("update-apply").hidden = !(data.ok && data.behind);
+  const ready = data.ok && (data.behind || data.restart_needed);
+  $("update-apply").hidden = !ready;
+  $("update-apply").textContent = data.behind ? "Update and restart" : "Restart to finish updating";
   maybeUpdatePopup(data);
 }
 
@@ -767,8 +769,12 @@ async function checkUpdate() {
 const UPDATE_SNOOZE_MS = 6 * 3600 * 1000;
 let updateSeen = "";
 function maybeUpdatePopup(data) {
-  if (!(data.ok && data.behind)) { $("update-pop").hidden = true; return; }
-  updateSeen = (data.changes || [])[0] + "|" + data.behind;
+  if (!(data.ok && (data.behind || data.restart_needed))) { $("update-pop").hidden = true; return; }
+  updateSeen = (data.changes || [])[0] + "|" + data.behind + "|" + !!data.restart_needed;
+  $("update-pop-text").textContent = data.behind
+    ? "A new version of JARVIS is ready. Please update: it takes about a minute and JARVIS restarts by itself."
+    : "A new version of JARVIS is already on this computer but is not running yet. Please restart to finish updating: it takes about a minute.";
+  $("update-pop-apply").textContent = data.behind ? "Update and restart" : "Restart now";
   let snooze = {};
   try { snooze = JSON.parse(localStorage.getItem("jarvis-update-snooze") || "{}"); } catch (e) { /* ignore */ }
   if (snooze.id === updateSeen && Date.now() - (snooze.at || 0) < UPDATE_SNOOZE_MS) return;
